@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Oldest root commit of well-known upstreams -> family label (§9 "Families").
+# The label is shown by `projects` and `projects here`; `[identity.family.<label>]
+# root_match = "adopt"` in config.toml treats every fork of the family as one project.
+#
+# Verified 2026-10-31 with `git rev-list --max-parents=0 --reverse HEAD` on a fresh
+# clone of each upstream default branch. Re-verify before every release.
+#   linux               git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+#   u-boot              source.denx.de/u-boot/u-boot (mirror github.com/u-boot/u-boot)
+#   buildroot           gitlab.com/buildroot.org/buildroot (mirror github.com/buildroot/buildroot)
+#   openembedded-core   git.openembedded.org/openembedded-core; poky shares this root
+#   trusted-firmware-a  review.trustedfirmware.org/TF-A/trusted-firmware-a
+#                       (mirror github.com/ARM-software/arm-trusted-firmware)
+#   busybox             git.busybox.net/busybox (mirror github.com/mirror/busybox)
+
+[roots]
+1da177e4c3f41524e886b7f1b8a0c1fc7321cac2 = "linux"
+0b666f81da14bf46cada222856762f7fd6641c26 = "u-boot"
+ffde94bd2ca21542ae0b4518348f8e986b9d92e0 = "buildroot"
+4b46c1f6e891b1ddd5968536440b888661fade3e = "openembedded-core"
+4f6ad66ae9fcc8bcb3b0fcee10b7ab1ffcaf1a56 = "trusted-firmware-a"
+cc8ed39b240180b58810784f844e253263594ac3 = "busybox"

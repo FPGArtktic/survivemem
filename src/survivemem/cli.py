@@ -1178,12 +1178,25 @@ def render_reindex(r: Record) -> str:
 
 
 def cmd_hook(ctx: Ctx) -> int:
+    if ctx.args.remote:
+        from survivemem import remote
+
+        return remote.run(ctx.args.event, sys.stdin, sys.stdout)
     return hooks.run(ctx.args.event, sys.stdin, sys.stdout)
 
 
 def cmd_serve(ctx: Ctx) -> int:
     from survivemem import logfile, mcp_server  # the MCP SDK is heavy; hooks must not import it
 
+    if ctx.args.http:
+        from survivemem import daemon
+
+        try:
+            daemon.parse_bind(ctx.args.bind)
+        except ValueError as e:
+            raise UsageError(str(e)) from e
+        daemon.serve_http(ctx.args.bind)
+        return 0
     logfile.configure()
     try:
         mcp_server.serve()
@@ -1428,9 +1441,12 @@ def build_parser() -> Parser:
     p.add_argument("--format", dest="export_format", choices=EXPORT_FORMATS, default="jsonl")
     p.add_argument("--kind", choices=dbmod.KINDS)
     _add(sub, "import", cmd_import, "read exported JSONL on stdin (idempotent on id)", (common,))
-    _add(sub, "serve", cmd_serve, "MCP stdio server", ())
+    p = _add(sub, "serve", cmd_serve, "MCP server: stdio, or --http daemon (Profile B)", ())
+    p.add_argument("--http", action="store_true", help="Streamable HTTP + hook endpoint")
+    p.add_argument("--bind", default="127.0.0.1:8765", help="host:port for --http")
     p = _add(sub, "hook", cmd_hook, "Claude Code hook handler (reads JSON on stdin)", ())
     p.add_argument("event", choices=sorted(hooks.HANDLERS))
+    p.add_argument("--remote", action="store_true", help="forward to the daemon (Profile B)")
     help_p = sub.add_parser("help", add_help=False)
     help_p.add_argument("topic", nargs="*")
     return parser

@@ -10,10 +10,14 @@ def main() -> None:
         sys.stderr.write("survivemem: Linux only\n")
         raise SystemExit(1)
     args = sys.argv[1:]
-    if len(args) == 2 and args[0] == "hook":
+    if args[:1] == ["hook"] and (len(args) == 2 or args[2:] == ["--remote"]):
         from survivemem import hooks
 
         if args[1] in hooks.HANDLERS:
+            if len(args) == 3:
+                from survivemem import remote
+
+                raise SystemExit(remote.run(args[1], sys.stdin, sys.stdout))
             raise SystemExit(hooks.run(args[1], sys.stdin, sys.stdout))
     from survivemem import cli
 

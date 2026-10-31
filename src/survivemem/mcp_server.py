@@ -3,6 +3,7 @@
 
 import functools
 import logging
+import os
 import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import closing, contextmanager
@@ -44,7 +45,18 @@ DOMAIN_ERRORS = (
 def session() -> Iterator[Session]:
     cfg = load_config()
     with closing(dbmod.connect()) as db:
-        yield db, cfg, identity.resolve_tolerant(db, Path.cwd(), cfg)
+        if os.environ.get("SURVIVEMEM_DAEMON") == "1":
+            yield db, cfg, _latest_session_project(db)
+        else:
+            yield db, cfg, identity.resolve_tolerant(db, Path.cwd(), cfg)
+
+
+def _latest_session_project(db: sqlite3.Connection) -> identity.Resolution:
+    """Profile B: the daemon has no repository around it and HTTP MCP clients do not send their
+    directory, so tools act on the project of the session the hooks saw last."""
+    project = store.latest_active_project(db)
+    found = store.find_project(db, project) if project else None
+    return identity.Resolution(found, "session" if found else "none")
 
 
 def _project_id(db: sqlite3.Connection, res: identity.Resolution, ref: str | None) -> str | None:

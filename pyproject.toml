@@ -20,6 +20,12 @@ dependencies = [
     "mcp>=2.0",
     # Ollama embeddings over loopback with timeouts; already pulled in by mcp. BSD-3-Clause.
     "httpx>=0.27",
+    # ASGI server for the optional HTTP daemon (Profile B); already a dependency of mcp. BSD-3.
+    "uvicorn>=0.30",
+    # Routes and responses of the daemon's hook and health endpoints; used by mcp. BSD-3.
+    "starlette>=0.40",
+    # Runs the synchronous hook handlers off the daemon's event loop; used by mcp. MIT.
+    "anyio>=4",
 ]
 
 [project.urls]

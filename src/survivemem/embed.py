@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from survivemem import store
+from survivemem.auth import in_container
 from survivemem.config import Config
 
 log = logging.getLogger(__name__)
@@ -31,9 +32,15 @@ class VecStatus:
     embedded: int
 
 
+# Inside a container the host's Ollama is reached through the runtime's host alias (§13).
+CONTAINER_HOST_ALIASES = frozenset({"host.containers.internal", "host.docker.internal"})
+
+
 def is_loopback(url: str) -> bool:
-    parts = urlsplit(url)
-    return parts.scheme == "http" and (parts.hostname or "") in LOOPBACK
+    """Loopback, or the container runtime's alias for the host when running in a container."""
+    host = urlsplit(url).hostname or ""
+    allowed = LOOPBACK | (CONTAINER_HOST_ALIASES if in_container() else frozenset())
+    return urlsplit(url).scheme == "http" and host in allowed
 
 
 def load_extension(db: sqlite3.Connection) -> bool:

@@ -266,6 +266,10 @@ SQL_STATE_LATEST = (
     "SELECT " + STATE_COLS + " FROM session_state WHERE project IS ?"
     " ORDER BY updated_at DESC, session_id LIMIT 1"
 )
+SQL_STATE_LATEST_PROJECT = (
+    "SELECT project FROM session_state WHERE project IS NOT NULL"
+    " ORDER BY updated_at DESC, session_id LIMIT 1"
+)
 SQL_STATE_LIST = "SELECT " + STATE_COLS + " FROM session_state ORDER BY updated_at DESC, session_id"
 SQL_STATE_PURGE = "DELETE FROM session_state WHERE updated_at < ?"
 SQL_STATE_PROJECT_MOVE = "UPDATE session_state SET project = ? WHERE project = ?"
@@ -1093,6 +1097,11 @@ def current_session(db: sqlite3.Connection, project: str | None) -> str:
     prompt hook saw last in this project, or a stable per-project id when there is none."""
     latest = latest_state(db, project)
     return latest.session_id if latest else f"mcp-{project or 'global'}"
+
+
+def latest_active_project(db: sqlite3.Connection) -> str | None:
+    row = db.execute(SQL_STATE_LATEST_PROJECT).fetchone()
+    return str(row[0]) if row else None
 
 
 def list_states(db: sqlite3.Connection) -> list[SessionState]:

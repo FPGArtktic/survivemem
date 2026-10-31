@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """`survivemem doctor`: integrity and integration checks, each ok / warn / fail."""
 
+import os
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -130,7 +131,37 @@ def check_clones(db: sqlite3.Connection) -> Check:
 
 
 def check_profile() -> Check:
-    return Check("profile", "ok", "A (native): hooks, CLI and MCP server open the DB directly")
+    """A unless hooks are registered with --remote or SURVIVEMEM_DAEMON_URL is set; for B the
+    daemon must answer /health with this client's version."""
+    from survivemem import remote, version
+
+    if not (
+        os.environ.get("SURVIVEMEM_DAEMON_URL")
+        or payload.integration_payload(Path.cwd())["remote_hooks"]
+    ):
+        return Check("profile", "ok", "A (native): hooks, CLI and MCP server open the DB directly")
+    url = remote.daemon_url()
+    try:
+        found = remote.health()
+    except (OSError, ValueError) as e:
+        return Check(
+            "profile",
+            "warn",
+            f"B (daemon) but {url} is unreachable ({e}); hooks fall "
+            "back to opening the DB themselves",
+        )
+    if found.get("version") != version():
+        return Check(
+            "profile",
+            "warn",
+            f"B (daemon) at {url} runs {found.get('version')}, this client is {version()}",
+        )
+    return Check(
+        "profile",
+        "ok",
+        f"B (daemon) at {url}, version {found.get('version')}, "
+        f"schema v{found.get('schema_version')}",
+    )
 
 
 def run_checks(db: sqlite3.Connection, cfg: Config) -> list[Check]:

@@ -150,9 +150,11 @@ def integration_payload(cwd: Path) -> dict[str, Any]:
         )
         for event, name in HOOK_EVENTS.items()
     }
+    commands = [c for _, s in settings for event in HOOK_EVENTS for c in _hook_commands(s, event)]
     return {
         "hooks": hooks,
         "mcp": _mcp_registered(cwd),
+        "remote_hooks": any("survivemem hook" in c and "--remote" in c for c in commands),
         "settings_files": [str(f) for f, s in settings if s],
     }
 

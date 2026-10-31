@@ -12,7 +12,7 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any
 
-from survivemem import __version__, identity, store
+from survivemem import __version__, hooks, identity, store
 from survivemem import db as dbmod
 from survivemem.config import Config, ConfigError, load_config
 from survivemem.model import Checkout, Memory, hit_json, memory_json, to_json
@@ -428,6 +428,10 @@ def render_here(r: Record) -> str:
 # Integration
 
 
+def cmd_hook(ctx: Ctx) -> int:
+    return hooks.run(ctx.args.event, sys.stdin, sys.stdout)
+
+
 def cmd_serve(ctx: Ctx) -> int:
     from survivemem import logfile, mcp_server  # the MCP SDK is heavy; hooks must not import it
 
@@ -536,6 +540,8 @@ def build_parser() -> Parser:
     _clone_commands(sub, common, filters)
     _project_commands(sub, common, filters)
     _add(sub, "serve", cmd_serve, "MCP stdio server", ())
+    p = _add(sub, "hook", cmd_hook, "Claude Code hook handler (reads JSON on stdin)", ())
+    p.add_argument("event", choices=sorted(hooks.HANDLERS))
     help_p = sub.add_parser("help", add_help=False)
     help_p.add_argument("topic", nargs="*")
     return parser

@@ -1,0 +1,15 @@
+{"type":"summary","summary":"earlier session"}
+{"type":"user","message":{"role":"user","content":"Why does do_rootfs fail on the de10-nano image?"},"uuid":"u1"}
+{"type":"assistant","message":{"id":"msg_1","role":"assistant","content":[{"type":"thinking","thinking":"secret reasoning"}]}}
+{"type":"assistant","message":{"id":"msg_1","role":"assistant","content":[{"type":"text","text":"Let me look at the log."}]}}
+{"type":"assistant","message":{"id":"msg_1","role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"bitbake core-image-minimal 2>&1 | tail -50"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ERROR: do_rootfs failed"}]}}
+{"type":"assistant","message":{"id":"msg_2","role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"/w/poky/build/conf/local.conf"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"MACHINE = \"cyclone5\""}]}}
+{"type":"assistant","message":{"id":"msg_3","role":"assistant","content":[{"type":"tool_use","id":"t3","name":"Edit","input":{"file_path":"/w/poky/build/conf/local.conf","old_string":"a","new_string":"b"}}]}}
+{"type":"assistant","message":{"id":"msg_3","role":"assistant","content":[{"type":"tool_use","id":"t4","name":"TodoWrite","input":{"todos":[{"content":"fix IMAGE_INSTALL","status":"in_progress"},{"content":"rebuild image","status":"pending"}]}}]}}
+{"type":"user","message":{"role":"user","content":"ignored subagent prompt"},"isSidechain":true}
+{"type":"user","message":{"role":"user","content":"<local-command-caveat>meta</local-command-caveat>"},"isMeta":true}
+this line is not json
+{"type":"assistant","message":{"id":"msg_4","role":"assistant","content":[{"type":"text","text":"The package nonexistent-pkg in IMAGE_INSTALL does not exist."}]}}
+{"type":"assistant","message":{"id":"msg_4","role":"assistant","content":[{"type":"text","text":"Remove it from local.conf and rebuild."}]}}

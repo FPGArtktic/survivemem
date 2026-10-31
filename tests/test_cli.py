@@ -181,3 +181,11 @@ def test_outside_project(run: Runner, tmp_path: Path, monkeypatch: pytest.Monkey
     assert run.json("add", "global by default")["project"] is None
     code, _, err = run("clones")
     assert code == 1 and "--project" in err
+
+
+def test_hook_command_reads_stdin(run: Runner, repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import io
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"prompt": "x", "cwd": str(repo)})))
+    code, out, _ = run("hook", "prompt")
+    assert code == 0 and out == ""

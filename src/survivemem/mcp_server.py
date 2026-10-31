@@ -12,10 +12,10 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from survivemem import __version__, identity, payload, store
+from survivemem import __version__, identity, payload, state, store
 from survivemem import db as dbmod
 from survivemem.config import Config, ConfigError, load_config
-from survivemem.model import hit_json, memory_json
+from survivemem.model import SessionState, hit_json, iso, memory_json
 
 log = logging.getLogger(__name__)
 
@@ -123,6 +123,57 @@ def memory_status() -> dict[str, Any]:
         return status
 
 
+def current_session(db: sqlite3.Connection, res: identity.Resolution) -> str:
+    """MCP servers are not told the Claude Code session id: use the session the prompt hook saw
+    last in this project, or a stable per-project id when there is none (Claude Desktop)."""
+    latest = store.latest_state(db, res.project_id)
+    return latest.session_id if latest else f"mcp-{res.project_id or 'global'}"
+
+
+def _state_payload(saved: SessionState) -> dict[str, Any]:
+    return {
+        "session_id": saved.session_id,
+        "project": saved.project,
+        "state": saved.state,
+        "updated_at": saved.updated_at,
+        "updated_at_iso": iso(saved.updated_at),
+        "rendered": state.render(saved.state),
+    }
+
+
+def checkpoint(
+    goal: str,
+    done: list[str],
+    in_progress: str,
+    next: list[str],  # shadows the builtin: the tool contract names it next
+    decisions: list[str],
+    files: list[str],
+    blockers: list[str] | None = None,
+) -> dict[str, Any]:
+    with session() as (db, _, res):
+        sid = current_session(db, res)
+        old = store.get_state(db, sid)
+        new = state.checkpoint(
+            old.state if old else {},
+            goal=goal,
+            done=done,
+            in_progress=in_progress,
+            next_=next,
+            decisions=decisions,
+            files=files,
+            blockers=blockers,
+        )
+        return _state_payload(store.save_state(db, sid, res.project_id, new))
+
+
+def session_state() -> dict[str, Any]:
+    with session() as (db, _, res):
+        found = store.get_state(db, current_session(db, res))
+        if found is None or state.is_empty(found.state):
+            return {}
+        return _state_payload(found)
+
+
 Tool = Callable[..., dict[str, Any]]
 
 TOOLS: tuple[tuple[Tool, str], ...] = (
@@ -158,6 +209,18 @@ TOOLS: tuple[tuple[Tool, str], ...] = (
     (
         memory_status,
         "READ. DB path, schema version, counts per kind, FTS health and the current project.",
+    ),
+    (
+        checkpoint,
+        "WRITE. Save the working state of this session so it survives context compaction: "
+        "goal, done, in_progress, next, decisions (each with a one-line reason), files, "
+        "optional blockers. Overwrites what it states, merges files. Call after every "
+        "completed subtask and before any long operation; reference the open investigation "
+        "id in in_progress.",
+    ),
+    (
+        session_state,
+        "READ. The current session's checkpoint (state and its rendering), or {} when none.",
     ),
 )
 

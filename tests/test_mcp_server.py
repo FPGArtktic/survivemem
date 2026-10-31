@@ -2,6 +2,7 @@
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,8 @@ EXPECTED_TOOLS = {
     "forget_memory",
     "list_recent",
     "memory_status",
+    "checkpoint",
+    "session_state",
 }
 
 
@@ -115,3 +118,41 @@ def test_stdio_transport_end_to_end(repo: Path) -> None:
             return json.loads(result.content[0].text)  # type: ignore[union-attr]
 
     assert anyio.run(go)["hits"][0]["content"] == "over stdio"
+
+
+def test_checkpoint_goes_to_the_latest_session_of_the_project(repo: Path) -> None:
+    from contextlib import closing
+
+    from survivemem import db as dbmod
+    from survivemem import store
+
+    call("store_memory", {"content": "creates the project", "kind": "fact"})
+    with closing(dbmod.connect()) as db:
+        project = store.get_project(db, "bsp").id
+        store.touch_session(db, "sess-0", project)
+        time.sleep(0.005)  # updated_at has millisecond resolution
+        store.touch_session(db, "sess-1", project)
+    saved = call(
+        "checkpoint",
+        {
+            "goal": "bring up uart",
+            "done": ["dts"],
+            "in_progress": "probe",
+            "next": ["bridge"],
+            "decisions": ["6.6 LTS"],
+            "files": ["a.dts"],
+        },
+    )
+    assert saved["session_id"] == "sess-1" and saved["state"]["source"] == "model"
+    assert "GOAL: bring up uart" in saved["rendered"]
+    got = call("session_state")
+    assert got["state"]["next"] == ["bridge"] and got["session_id"] == "sess-1"
+
+
+def test_session_state_empty_without_checkpoint(repo: Path) -> None:
+    assert call("session_state") == {}
+    saved = call(
+        "checkpoint",
+        {"goal": "g", "done": [], "in_progress": "", "next": [], "decisions": [], "files": []},
+    )
+    assert saved["session_id"].startswith("mcp-")

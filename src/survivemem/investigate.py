@@ -31,11 +31,12 @@ CLOSING_LINE = "Call investigation_status before the next experiment."
 # ---------------------------------------------------------------------------------------------
 # Normalisation (loop guard key)
 
+# VAR=value assignments stay in the key: MACHINE=qemuarm and MACHINE=cyclone5 builds are
+# different experiments. `env` itself is dropped, its assignments are kept.
 LEADING = (
     re.compile(r"^cd\s+[^;&|]+?\s*&&\s*"),
     re.compile(r"^sudo(\s+-\S+)*\s+"),
-    re.compile(r"^env(\s+-\S+)*(\s+\w+=\S*)*\s+"),
-    re.compile(r"^(\w+=(?:'[^']*'|\"[^\"]*\"|\S*)\s+)+"),
+    re.compile(r"^env(\s+-\S+)*\s+"),
 )
 REDIRECT = re.compile(r"\s+2>&1(?=\s|$)")
 PIPE_TAIL = re.compile(r"\s*\|\s*(tee|head|tail)\b[^|]*")
@@ -45,7 +46,7 @@ TIMESTAMP = re.compile(
 
 
 def normalise_command(command: str, workspace: Path | None = None) -> str:
-    """Strip cd/sudo/env/VAR= prefixes, timestamps, 2>&1 and tee/head/tail; workspace → $WS,
+    """Strip cd/sudo/env prefixes, timestamps, 2>&1 and tee/head/tail; workspace → $WS,
     $HOME → ~; collapse whitespace. Arguments and flags are kept."""
     cmd = command.strip()
     changed = True

@@ -16,8 +16,14 @@ from tests.helpers import make_repo
     [
         ("cd build && bitbake core-image-minimal 2>&1 | tee log.txt", "bitbake core-image-minimal"),
         ("sudo dmesg | tail -50", "dmesg"),
-        ("env MACHINE=cyclone5 bitbake -c compile linux", "bitbake -c compile linux"),
-        ("ARCH=arm CROSS_COMPILE=arm-linux- make -j8 zImage", "make -j8 zImage"),
+        (
+            "env MACHINE=cyclone5 bitbake -c compile linux",
+            "MACHINE=cyclone5 bitbake -c compile linux",
+        ),
+        (
+            "ARCH=arm CROSS_COMPILE=arm-linux- make -j8 zImage",
+            "ARCH=arm CROSS_COMPILE=arm-linux- make -j8 zImage",
+        ),
         ("cd a && cd b && sudo -E make   -C  x", "make -C x"),
         ("openocd -f board.cfg 2>&1 | head -n 20", "openocd -f board.cfg"),
         ("cp out.rbf /srv/tftp/out-2026-10-31T08:12:00.rbf", "cp out.rbf /srv/tftp/out-.rbf"),

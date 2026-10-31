@@ -10,7 +10,15 @@ from dataclasses import dataclass
 from typing import Any
 
 from survivemem.db import KINDS, SOURCES, new_id, now_ms, transaction
-from survivemem.model import Checkout, Hit, Identity, Memory, Project, ProjectSummary
+from survivemem.model import (
+    Checkout,
+    Hit,
+    Identity,
+    Memory,
+    Project,
+    ProjectSummary,
+    SessionState,
+)
 from survivemem.redact import contains_secret
 
 
@@ -185,6 +193,26 @@ SQL_CHECKOUT_PURGE = (
     "DELETE FROM checkouts WHERE present = 0 AND NOT EXISTS (SELECT 1 FROM memories m"
     " WHERE m.scope = 'checkout:' || checkouts.id AND m.deleted_at IS NULL)"
 )
+
+STATE_COLS = "session_id, project, state, updated_at"
+SQL_STATE_GET = "SELECT " + STATE_COLS + " FROM session_state WHERE session_id = ?"
+SQL_STATE_SAVE = (
+    "INSERT INTO session_state (" + STATE_COLS + ") VALUES (:sid, :project, :state, :now)"
+    " ON CONFLICT(session_id) DO UPDATE SET project = coalesce(excluded.project,"
+    " session_state.project), state = excluded.state, updated_at = excluded.updated_at"
+)
+SQL_STATE_TOUCH = (
+    "INSERT INTO session_state (" + STATE_COLS + ") VALUES (:sid, :project, '{}', :now)"
+    " ON CONFLICT(session_id) DO UPDATE SET project = coalesce(excluded.project,"
+    " session_state.project), updated_at = excluded.updated_at"
+)
+SQL_STATE_LATEST = (
+    "SELECT " + STATE_COLS + " FROM session_state WHERE project IS ?"
+    " ORDER BY updated_at DESC, session_id LIMIT 1"
+)
+SQL_STATE_LIST = "SELECT " + STATE_COLS + " FROM session_state ORDER BY updated_at DESC, session_id"
+SQL_STATE_PURGE = "DELETE FROM session_state WHERE updated_at < ?"
+SQL_STATE_PROJECT_MOVE = "UPDATE session_state SET project = ? WHERE project = ?"
 
 SQL_LINK_INSERT = "INSERT OR IGNORE INTO project_links (parent, child) VALUES (?, ?)"
 SQL_LINK_DELETE = "DELETE FROM project_links WHERE parent = ? AND child = ?"
@@ -650,6 +678,7 @@ MERGE_STATEMENTS: tuple[str, ...] = (
     SQL_MOVE_CHECKOUTS,
     SQL_MOVE_LINKS_PARENT,
     SQL_MOVE_LINKS_CHILD,
+    SQL_STATE_PROJECT_MOVE,
 )
 
 
@@ -776,3 +805,55 @@ def linked_projects(db: sqlite3.Connection, project: str) -> tuple[str, ...]:
 
 def all_links(db: sqlite3.Connection) -> list[tuple[str, str]]:
     return [(row["parent"], row["child"]) for row in db.execute(SQL_LINKS_ALL)]
+
+
+# ---------------------------------------------------------------------------------------------
+# Session state (§16): ephemeral, per session, never searched or exported
+
+
+def _state(row: sqlite3.Row) -> SessionState:
+    try:
+        data = json.loads(row["state"])
+    except json.JSONDecodeError:
+        data = {}
+    return SessionState(
+        row["session_id"], row["project"], data if isinstance(data, dict) else {}, row["updated_at"]
+    )
+
+
+def get_state(db: sqlite3.Connection, session_id: str) -> SessionState | None:
+    row = db.execute(SQL_STATE_GET, (session_id,)).fetchone()
+    return _state(row) if row else None
+
+
+def save_state(
+    db: sqlite3.Connection, session_id: str, project: str | None, state: dict[str, Any]
+) -> SessionState:
+    params = {
+        "sid": session_id,
+        "project": project,
+        "now": now_ms(),
+        "state": json.dumps(state, ensure_ascii=False),
+    }
+    db.execute(SQL_STATE_SAVE, params)
+    found = get_state(db, session_id)
+    assert found is not None
+    return found
+
+
+def touch_session(db: sqlite3.Connection, session_id: str, project: str | None) -> None:
+    """Mark the session as the most recently active one of its project."""
+    db.execute(SQL_STATE_TOUCH, {"sid": session_id, "project": project, "now": now_ms()})
+
+
+def latest_state(db: sqlite3.Connection, project: str | None) -> SessionState | None:
+    row = db.execute(SQL_STATE_LATEST, (project,)).fetchone()
+    return _state(row) if row else None
+
+
+def list_states(db: sqlite3.Connection) -> list[SessionState]:
+    return [_state(row) for row in db.execute(SQL_STATE_LIST)]
+
+
+def purge_states(db: sqlite3.Connection, older_than_ms: int) -> int:
+    return db.execute(SQL_STATE_PURGE, (older_than_ms,)).rowcount

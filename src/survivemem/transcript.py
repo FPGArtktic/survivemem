@@ -86,5 +86,55 @@ def assistant_messages(entries: Iterable[Entry]) -> list[str]:
     return messages
 
 
+FILE_TOOLS = {
+    "Edit": "file_path",
+    "MultiEdit": "file_path",
+    "Write": "file_path",
+    "Read": "file_path",
+    "NotebookEdit": "notebook_path",
+}
+
+
+def tool_uses(entries: Iterable[Entry]) -> list[tuple[str, dict[str, Any]]]:
+    """(tool name, input) of every assistant tool call, oldest first."""
+    calls = []
+    for entry in entries:
+        content = _content(entry, "assistant")
+        for block in _blocks(content, "tool_use") if content is not None else []:
+            name, args = block.get("name"), block.get("input")
+            if isinstance(name, str) and isinstance(args, dict):
+                calls.append((name, args))
+    return calls
+
+
+def files_touched(calls: Iterable[tuple[str, dict[str, Any]]], limit: int = 30) -> list[str]:
+    """Paths from Edit/Write/Read calls, deduplicated, newest first."""
+    seen: dict[str, None] = {}
+    for name, args in reversed(list(calls)):
+        path = args.get(FILE_TOOLS.get(name, ""))
+        if isinstance(path, str) and path and path not in seen:
+            seen[path] = None
+    return list(seen)[:limit]
+
+
+def bash_commands(calls: Iterable[tuple[str, dict[str, Any]]], limit: int = 10) -> list[str]:
+    commands = [str(a["command"]) for n, a in calls if n == "Bash" and a.get("command")]
+    return commands[-limit:]
+
+
+def last_todos(calls: Iterable[tuple[str, dict[str, Any]]]) -> list[dict[str, str]]:
+    """The last TodoWrite payload as [{content, status}], or [] when there is none."""
+    todos: list[dict[str, str]] = []
+    for name, args in calls:
+        items = args.get("todos")
+        if name == "TodoWrite" and isinstance(items, list):
+            todos = [
+                {"content": str(t.get("content", "")), "status": str(t.get("status", ""))}
+                for t in items
+                if isinstance(t, dict) and t.get("content")
+            ]
+    return todos
+
+
 def last(items: list[str]) -> str:
     return items[-1] if items else ""

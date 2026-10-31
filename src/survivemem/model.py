@@ -81,6 +81,14 @@ class ProjectSummary:
     checkouts: tuple[Checkout, ...] = field(default=())
 
 
+@dataclass(frozen=True, slots=True)
+class SessionState:
+    session_id: str
+    project: str | None
+    state: dict[str, Any]
+    updated_at: int
+
+
 def to_json(obj: Any) -> Any:
     """Dataclass → JSON-ready dict with *_iso companions for every timestamp."""
     if isinstance(obj, list | tuple):

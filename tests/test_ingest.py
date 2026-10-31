@@ -117,3 +117,15 @@ def test_detect_tool(command: str, tool: str) -> None:
 def test_unknown_tool() -> None:
     with pytest.raises(ValueError, match="unknown tool"):
         ingest.extract("x", "vivado")
+
+
+def test_device_tree_compiler_error() -> None:
+    text = (
+        "  DTC     arch/arm/boot/dts/socfpga_cyclone5_de10_nano.dtb\n"
+        "Error: arch/arm/boot/dts/socfpga_cyclone5_de10_nano.dts:42.1-2 syntax error\n"
+        "FATAL ERROR: Unable to parse input tree\n"
+        "make[2]: *** [scripts/Makefile.lib:423: arch/arm/boot/dts/x.dtb] Error 1\n"
+    )
+    x = ingest.extract(text, "make")
+    assert x.tags == ("make", "dtc", "arch/arm/boot/dts/socfpga_cyclone5_de10_nano.dts")
+    assert x.excerpt.startswith("Error: arch/arm/boot/dts/socfpga_cyclone5_de10_nano.dts:42.1-2")

@@ -235,7 +235,7 @@ def sync_blockers(s: Session, payload: HookInput, current: str | None) -> None:
     kept = [b for b in blockers if not b.startswith(investigate.LOOP_PREFIX) or b == current]
     if kept != blockers:
         try:
-            store.save_state(s.db, sid, s.res.project_id, found.state | {"blockers": kept})
+            store.set_state_key(s.db, sid, s.res.project_id, "blockers", kept)
         except sqlite3.OperationalError as e:
             log.warning("cannot update blockers: %s", e)
 
@@ -479,9 +479,7 @@ def record_experiment(
     store.add_entry(s.db, inv.id, store.NewEntry("note", note))
     sid = text_field(payload, "session_id")
     if sid:
-        found = store.get_state(s.db, sid)
-        current = found.state if found else {}
-        store.save_state(s.db, sid, s.res.project_id, current | {"blockers": [note]})
+        store.set_state_key(s.db, sid, s.res.project_id, "blockers", [note])
 
 
 def capture_mcp(payload: HookInput, name: str) -> None:
@@ -562,24 +560,22 @@ def capped_candidate(
     refs: list[dict[str, Any]] | None = None,
 ) -> None:
     """At most 50 candidates per session from PostToolUse; then stop and log once."""
-    sid = text_field(payload, "session_id") or "unknown"
-    found = store.get_state(s.db, sid)
-    current = found.state if found else {}
-    written = int(current.get("_posttool_candidates", 0))
-    if written >= POSTTOOL_CANDIDATE_CAP:
-        if written == POSTTOOL_CANDIDATE_CAP:
-            log.warning("posttool: %d candidates in session %s, not writing more", written, sid)
-            store.save_state(
-                s.db, sid, s.res.project_id, current | {"_posttool_candidates": written + 1}
-            )
-        return
     if contains_secret(content):
         log.info("posttool: candidate skipped, content looks like it contains a secret")
+        return
+    sid = text_field(payload, "session_id") or "unknown"
+    written = store.bump_state(s.db, sid, s.res.project_id, "_posttool_candidates")
+    if written > POSTTOOL_CANDIDATE_CAP:
+        if written == POSTTOOL_CANDIDATE_CAP + 1:
+            log.warning(
+                "posttool: %d candidates in session %s, not writing more",
+                POSTTOOL_CANDIDATE_CAP,
+                sid,
+            )
         return
     store.add_memory(
         s.db, content, "candidate", project=s.res.project_id, source=source, tags=tags, refs=refs
     )
-    store.save_state(s.db, sid, s.res.project_id, current | {"_posttool_candidates": written + 1})
 
 
 HANDLERS: dict[str, Callable[[HookInput], str]] = {

@@ -1050,8 +1050,15 @@ def cmd_state_show(ctx: Ctx) -> int:
 
 
 def cmd_state_set(ctx: Ctx) -> int:
-    a = ctx.args
     sid = _session_id(ctx)
+    with dbmod.transaction(ctx.db):  # hooks may update this session's state meanwhile
+        saved = _state_set(ctx, sid)
+    ctx.out.record(state_record(sid, saved), render_state_record)
+    return 0
+
+
+def _state_set(ctx: Ctx, sid: str) -> SessionState:
+    a = ctx.args
     old = store.get_state(ctx.db, sid)
     new = state.checkpoint(
         old.state if old else {},
@@ -1063,9 +1070,7 @@ def cmd_state_set(ctx: Ctx) -> int:
         files=a.file or (),
         blockers=a.blocker,
     )
-    saved = store.save_state(ctx.db, sid, ctx.here.project_id, new)
-    ctx.out.record(state_record(sid, saved), render_state_record)
-    return 0
+    return store.save_state(ctx.db, sid, ctx.here.project_id, new)
 
 
 def cmd_state_purge(ctx: Ctx) -> int:

@@ -120,3 +120,34 @@ def test_transcript_state_redacts_secrets() -> None:
     ]
     found = state.from_transcript(entries)
     assert token not in json.dumps(found) and "[REDACTED]" in found["commands"][0]
+
+
+def test_parallel_counter_updates_are_not_lost(tmp_path: Path) -> None:
+    import threading
+
+    from survivemem import db as dbmod
+
+    path = tmp_path / "par.db"
+    dbmod.connect(path).close()
+
+    def worker() -> None:
+        conn = dbmod.connect(path)
+        for _ in range(25):
+            store.bump_state(conn, "s", None, "_posttool_candidates")
+        conn.close()
+
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    conn = dbmod.connect(path)
+    saved = store.get_state(conn, "s")
+    assert saved and saved.state["_posttool_candidates"] == 100
+    store.set_state_key(conn, "s", None, "blockers", ["LOOP: x"])
+    again = store.get_state(conn, "s")
+    assert (
+        again
+        and again.state["blockers"] == ["LOOP: x"]
+        and again.state["_posttool_candidates"] == 100
+    )

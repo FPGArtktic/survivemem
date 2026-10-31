@@ -246,12 +246,20 @@ SQL_STATE_TOUCH = (
     " ON CONFLICT(session_id) DO UPDATE SET project = coalesce(excluded.project,"
     " session_state.project), updated_at = excluded.updated_at"
 )
-SQL_STATE_COUNT_PROMPT = (
-    "INSERT INTO session_state (" + STATE_COLS + ") VALUES (:sid, :project, '{\"_prompts\": 1}',"
-    " :now) ON CONFLICT(session_id) DO UPDATE SET project = coalesce(excluded.project,"
-    " session_state.project), state = json_set(session_state.state, '$._prompts',"
-    " coalesce(json_extract(session_state.state, '$._prompts'), 0) + 1),"
-    " updated_at = excluded.updated_at RETURNING json_extract(state, '$._prompts')"
+# Single-statement updates of one key: hooks running in parallel cannot lose each other's
+# writes the way a read-modify-write of the whole JSON could.
+SQL_STATE_BUMP = (
+    "INSERT INTO session_state (" + STATE_COLS + ") VALUES (:sid, :project,"
+    " json_object(:key, 1), :now) ON CONFLICT(session_id) DO UPDATE SET project ="
+    " coalesce(excluded.project, session_state.project), state = json_set(session_state.state,"
+    " '$.' || :key, coalesce(json_extract(session_state.state, '$.' || :key), 0) + 1),"
+    " updated_at = excluded.updated_at RETURNING json_extract(state, '$.' || :key)"
+)
+SQL_STATE_SET_KEY = (
+    "INSERT INTO session_state (" + STATE_COLS + ") VALUES (:sid, :project,"
+    " json_object(:key, json(:value)), :now) ON CONFLICT(session_id) DO UPDATE SET project ="
+    " coalesce(excluded.project, session_state.project), state = json_set(session_state.state,"
+    " '$.' || :key, json(:value)), updated_at = excluded.updated_at"
 )
 SQL_ANY_OPEN_INVESTIGATION = "SELECT 1 FROM investigations WHERE status = 'open' LIMIT 1"
 SQL_STATE_LATEST = (
@@ -1029,12 +1037,30 @@ def touch_session(db: sqlite3.Connection, session_id: str, project: str | None) 
     db.execute(SQL_STATE_TOUCH, {"sid": session_id, "project": project, "now": now_ms()})
 
 
-def count_prompt(db: sqlite3.Connection, session_id: str, project: str | None) -> int:
-    """Touch the session and return how many prompts it has seen, this one included."""
+def bump_state(db: sqlite3.Connection, session_id: str, project: str | None, key: str) -> int:
+    """Atomically increment a counter in the session's state; returns the new value."""
     row = db.execute(
-        SQL_STATE_COUNT_PROMPT, {"sid": session_id, "project": project, "now": now_ms()}
+        SQL_STATE_BUMP, {"sid": session_id, "project": project, "key": key, "now": now_ms()}
     ).fetchone()
     return int(row[0])
+
+
+def set_state_key(
+    db: sqlite3.Connection, session_id: str, project: str | None, key: str, value: Any
+) -> None:
+    params = {
+        "sid": session_id,
+        "project": project,
+        "key": key,
+        "value": json.dumps(value, ensure_ascii=False),
+        "now": now_ms(),
+    }
+    db.execute(SQL_STATE_SET_KEY, params)
+
+
+def count_prompt(db: sqlite3.Connection, session_id: str, project: str | None) -> int:
+    """Touch the session and return how many prompts it has seen, this one included."""
+    return bump_state(db, session_id, project, "_prompts")
 
 
 def any_open_investigation(db: sqlite3.Connection) -> bool:

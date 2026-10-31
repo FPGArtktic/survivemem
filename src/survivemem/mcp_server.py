@@ -15,6 +15,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from survivemem import db as dbmod
 from survivemem import embed, identity, investigate, payload, state, store, version
 from survivemem.config import Config, ConfigError, load_config
+from survivemem.db import transaction
 from survivemem.model import Investigation, SessionState, hit_json, iso, memory_json, to_json
 
 log = logging.getLogger(__name__)
@@ -146,18 +147,36 @@ def checkpoint(
 ) -> dict[str, Any]:
     with session() as (db, _, res):
         sid = store.current_session(db, res.project_id)
-        old = store.get_state(db, sid)
-        new = state.checkpoint(
-            old.state if old else {},
-            goal=goal,
-            done=done,
-            in_progress=in_progress,
-            next_=next,
-            decisions=decisions,
-            files=files,
-            blockers=blockers,
-        )
-        return _state_payload(store.save_state(db, sid, res.project_id, new))
+        with transaction(db):  # hooks may update this session's state meanwhile
+            return _state_payload(
+                _checkpoint(db, res, sid, goal, done, in_progress, next, decisions, files, blockers)
+            )
+
+
+def _checkpoint(
+    db: sqlite3.Connection,
+    res: identity.Resolution,
+    sid: str,
+    goal: str,
+    done: list[str],
+    in_progress: str,
+    next_: list[str],
+    decisions: list[str],
+    files: list[str],
+    blockers: list[str] | None,
+) -> SessionState:
+    old = store.get_state(db, sid)
+    new = state.checkpoint(
+        old.state if old else {},
+        goal=goal,
+        done=done,
+        in_progress=in_progress,
+        next_=next_,
+        decisions=decisions,
+        files=files,
+        blockers=blockers,
+    )
+    return store.save_state(db, sid, res.project_id, new)
 
 
 def session_state() -> dict[str, Any]:

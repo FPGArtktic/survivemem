@@ -1394,10 +1394,3 @@ def run(argv: Sequence[str] | None = None) -> int:
         code = next(c for t, c in ERRORS if isinstance(e, t))
         emit_error(code, str(e), machine=machine)
         return code
-
-
-def main() -> None:
-    if sys.platform != "linux":
-        sys.stderr.write("survivemem: Linux only\n")
-        raise SystemExit(1)
-    raise SystemExit(run())

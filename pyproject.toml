@@ -26,7 +26,7 @@ dependencies = [
 vec = ["sqlite-vec>=0.1.6"]
 
 [project.scripts]
-survivemem = "survivemem.cli:main"
+survivemem = "survivemem.entry:main"
 
 [dependency-groups]
 # sqlite-vec is optional at runtime; installed for development so the vector path is tested.

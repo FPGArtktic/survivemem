@@ -256,3 +256,22 @@ def test_version_flag(run: Runner) -> None:
         cli.run(["--version"])
     assert exc.value.code == 0
     assert run.capsys.readouterr().out.startswith("survivemem ")
+
+
+def test_entry_point_fast_path_for_hooks(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import io
+    import sys
+
+    from survivemem import entry
+
+    monkeypatch.setattr(sys, "argv", ["survivemem", "hook", "prompt"])
+    monkeypatch.setattr(sys, "stdin", io.StringIO("{}"))
+    with pytest.raises(SystemExit) as exc:
+        entry.main()
+    assert exc.value.code == 0
+    monkeypatch.setattr(sys, "argv", ["survivemem", "hook", "bogus"])
+    with pytest.raises(SystemExit) as exc:
+        entry.main()
+    assert exc.value.code == 1 and "invalid choice" in capsys.readouterr().err

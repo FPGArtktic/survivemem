@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, TextIO, TypedDict, cast
 
 from survivemem import db as dbmod
-from survivemem import identity, logfile, store, transcript
+from survivemem import identity, logfile, state, store, transcript
 from survivemem.config import Config, ConfigError, load_config
 from survivemem.model import Checkout, Hit
 from survivemem.redact import contains_secret
@@ -27,6 +27,7 @@ from survivemem.redact import contains_secret
 log = logging.getLogger(__name__)
 
 PROMPT_BUDGET = 6000
+SESSION_START_MEMORY_BUDGET = 3000
 RECORD_LIMIT = 400
 SEARCH_LIMIT = 8
 CANDIDATE_PROMPT_CHARS = 300
@@ -44,6 +45,8 @@ class HookInput(TypedDict, total=False):
     prompt: str
     stop_hook_active: bool
     last_assistant_message: str
+    trigger: str
+    source: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +137,40 @@ def relevant(s: Session, query: str) -> list[Hit]:
     return hits
 
 
+def touch(s: Session, payload: HookInput) -> None:
+    """Record which session is active in this project, for the MCP checkpoint tool."""
+    sid = text_field(payload, "session_id")
+    if not sid:
+        return
+    try:
+        store.touch_session(s.db, sid, s.res.project_id)
+    except sqlite3.OperationalError as e:
+        log.warning("cannot record session %s: %s", sid, e)
+
+
+def store_candidate(s: Session, prompt: str, answer: str, tag: str) -> None:
+    content = candidate_content(prompt, answer)
+    if not content:
+        return
+    if contains_secret(content):
+        log.info("%s: candidate skipped, content looks like it contains a secret", tag)
+        return
+    store.add_memory(
+        s.db, content, "candidate", project=s.res.project_id, source="hook", tags=(tag,)
+    )
+
+
+def purge_old_states(s: Session) -> None:
+    """Housekeeping only: on a read-only DB it is skipped, never at the cost of the output."""
+    try:
+        removed = store.purge_states(s.db, dbmod.now_ms() - state.TTL_MS)
+    except sqlite3.OperationalError as e:
+        log.warning("cannot purge old session states: %s", e)
+        return
+    if removed:
+        log.info("purged %d session states older than 14 days", removed)
+
+
 # ---------------------------------------------------------------------------------------------
 # Handlers
 
@@ -141,6 +178,7 @@ def relevant(s: Session, query: str) -> list[Hit]:
 def hook_prompt(payload: HookInput) -> str:
     prompt = text_field(payload, "prompt")
     with session(payload) as s:
+        touch(s, payload)
         head = [x for x in (identity.checkout_line(s.db, s.res), s.res.hint) if x]
         budget = PROMPT_BUDGET - sum(len(x) + 1 for x in head)
         block = render_memories(s, relevant(s, prompt), budget) if prompt else ""
@@ -163,22 +201,71 @@ def hook_stop(payload: HookInput) -> str:
     entries = transcript.tail(Path(path)) if path else []
     answer = text_field(payload, "last_assistant_message")
     answer = answer or transcript.last(transcript.assistant_messages(entries))
-    content = candidate_content(transcript.last(transcript.user_prompts(entries)), answer)
-    if not content:
-        return ""
-    if contains_secret(content):
-        log.info("stop: candidate skipped, content looks like it contains a secret")
+    if not answer.strip():
         return ""
     with session(payload) as s:
-        store.add_memory(
-            s.db, content, "candidate", project=s.res.project_id, source="hook", tags=("stop",)
-        )
+        store_candidate(s, transcript.last(transcript.user_prompts(entries)), answer, "stop")
     return ""
+
+
+def hook_precompact(payload: HookInput) -> str:
+    """Deterministic fallback checkpoint from the transcript, merged under the model's one."""
+    sid = text_field(payload, "session_id")
+    path = text_field(payload, "transcript_path")
+    entries = transcript.tail(Path(path)) if path else []
+    found = state.from_transcript(entries)
+    with session(payload) as s:
+        if sid:
+            old = store.get_state(s.db, sid)
+            merged = state.merge_heuristic(old.state if old else {}, found)
+            store.save_state(s.db, sid, s.res.project_id, merged)
+        prompts = transcript.user_prompts(entries)
+        store_candidate(
+            s, transcript.last(prompts), str(found.get("last_answer", "")), "precompact"
+        )
+        purge_old_states(s)
+    return ""
+
+
+def startup_hits(s: Session, st: state.State) -> list[Hit]:
+    """Memories for the state's goal and next steps, topped up with the newest ones."""
+    query = " ".join(
+        [
+            state.text(st.get("goal")),
+            state.text(st.get("in_progress")),
+            *state.strings(st.get("next")),
+        ]
+    )
+    hits = relevant(s, query) if query.strip() else []
+    seen = {h.memory.id for h in hits}
+    view = store.visible_view(s.db, s.res.project_id)
+    for m in store.list_memories(s.db, view, limit=SEARCH_LIMIT):
+        if len(hits) < SEARCH_LIMIT and m.id not in seen:
+            hits.append(Hit(m, 0.0, ("recent",)))
+    return hits
+
+
+def hook_session_start(payload: HookInput) -> str:
+    """After compaction or resume: clone line, session state, long-term memories."""
+    sid = text_field(payload, "session_id")
+    with session(payload) as s:
+        touch(s, payload)
+        found = store.get_state(s.db, sid) if sid else None
+        st = found.state if found else {}
+        parts = [
+            identity.checkout_line(s.db, s.res, always=True),
+            state.render(st),
+            render_memories(s, startup_hits(s, st), SESSION_START_MEMORY_BUDGET),
+        ]
+        purge_old_states(s)
+    return "\n".join(p for p in parts if p)
 
 
 HANDLERS: dict[str, Callable[[HookInput], str]] = {
     "prompt": hook_prompt,
     "stop": hook_stop,
+    "precompact": hook_precompact,
+    "session-start": hook_session_start,
 }
 
 

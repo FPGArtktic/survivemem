@@ -5,6 +5,15 @@
     ],
     "Stop": [
       { "hooks": [{ "type": "command", "command": "survivemem hook stop", "timeout": 5 }] }
+    ],
+    "PreCompact": [
+      { "hooks": [{ "type": "command", "command": "survivemem hook precompact", "timeout": 30 }] }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact|resume",
+        "hooks": [{ "type": "command", "command": "survivemem hook session-start", "timeout": 5 }]
+      }
     ]
   }
 }

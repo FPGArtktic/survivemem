@@ -199,3 +199,96 @@ def test_prompt_latency_with_10000_memories(repo: Path) -> None:
     whole = time.perf_counter() - started
     assert "<survivemem>" in proc.stdout
     assert whole < 1.0, f"prompt hook process took {whole * 1000:.0f} ms"
+
+
+def test_precompact_saves_heuristic_state_and_candidate(repo: Path) -> None:
+    payload = {
+        "session_id": "s9",
+        "transcript_path": str(FIXTURE),
+        "cwd": str(repo),
+        "trigger": "auto",
+        "custom_instructions": None,
+    }
+    assert run_hook("precompact", payload) == ""
+    with open_db() as db:
+        saved = store.get_state(db, "s9")
+        assert saved is not None and saved.state["source"] == "hook"
+        assert saved.state["in_progress"] == "fix IMAGE_INSTALL"
+        assert saved.state["files"] == ["/w/poky/build/conf/local.conf"]
+        (cand,) = store.list_memories(db, store.ALL, kind="candidate")
+        assert cand.tags == ("precompact",)
+
+
+def test_precompact_keeps_model_goal(repo: Path) -> None:
+    from survivemem import state
+
+    pid = project_of(repo)
+    with open_db() as db:
+        store.save_state(
+            db, "s9", pid, state.checkpoint({}, goal="bring up the UART", decisions=["use ttyS0"])
+        )
+    run_hook("precompact", {"session_id": "s9", "transcript_path": str(FIXTURE), "cwd": str(repo)})
+    with open_db() as db:
+        saved = store.get_state(db, "s9")
+    assert saved and saved.state["goal"] == "bring up the UART"
+    assert saved.state["decisions"] == ["use ttyS0"] and saved.state["source"] == "model"
+
+
+def test_session_start_reinjects_state_and_memories(repo: Path) -> None:
+    from survivemem import state
+
+    pid = project_of(repo)
+    with open_db() as db:
+        store.add_memory(db, "UART console is ttyS0 at 115200", "environment", project=pid)
+        store.add_memory(db, "unrelated older note", "fact", project=pid)
+        store.save_state(
+            db,
+            "s9",
+            pid,
+            state.checkpoint({}, goal="UART console bring-up", next_=["check ttyS0 baud"]),
+        )
+    out = run_hook("session-start", {"session_id": "s9", "source": "compact", "cwd": str(repo)})
+    clone, rest = out.split("\n", 1)
+    assert clone.startswith("linux-de10 · this clone ")
+    assert "<survivemem-state>\nGOAL: UART console bring-up" in rest
+    memories = rest.split("<survivemem>\n", 1)[1]
+    assert memories.startswith("- [environment] UART console is ttyS0")
+    assert "unrelated older note" in memories
+
+
+def test_session_start_outside_any_project_with_nothing_stored(tmp_path: Path) -> None:
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert (
+        run_hook("session-start", {"session_id": "x", "source": "resume", "cwd": str(plain)}) == ""
+    )
+
+
+def test_prompt_touches_session_and_old_states_are_purged(repo: Path) -> None:
+    pid = project_of(repo)
+    with open_db() as db:
+        store.save_state(db, "ancient", pid, {"goal": "old"})
+        db.execute("UPDATE session_state SET updated_at = 0 WHERE session_id = 'ancient'")
+    run_hook("prompt", {"prompt": "hi", "cwd": str(repo), "session_id": "fresh"})
+    with open_db() as db:
+        latest = store.latest_state(db, pid)
+        assert latest and latest.session_id == "fresh"
+    run_hook("session-start", {"session_id": "fresh", "source": "resume", "cwd": str(repo)})
+    with open_db() as db:
+        assert store.get_state(db, "ancient") is None
+
+
+def test_session_start_on_readonly_db_still_prints(repo: Path) -> None:
+    from survivemem import state
+
+    pid = project_of(repo)
+    with open_db() as db:
+        store.save_state(db, "s9", pid, state.checkpoint({}, goal="keep working"))
+    db_file = paths.db_path()
+    db_file.chmod(0o444)
+    db_file.parent.chmod(0o555)
+    try:
+        out = run_hook("session-start", {"session_id": "s9", "source": "compact", "cwd": str(repo)})
+    finally:
+        db_file.parent.chmod(0o755)
+    assert "GOAL: keep working" in out

@@ -521,8 +521,8 @@ def bisect(entries: Sequence[Entry]) -> dict[str, Any]:
     good = [e for e in runs if e.result == "good"]
     bad = [e for e in runs if e.result == "bad"]
     boundary = None
-    if good and bad:
-        first_bad = next((e for e in bad if e.seq > good[-1].seq), bad[0])
+    first_bad = next((e for e in bad if good and e.seq > good[-1].seq), None)
+    if good and first_bad:
         boundary = {"last_good": _bisect_row(good[-1]), "first_bad_after": _bisect_row(first_bad)}
     return {"experiments": [_bisect_row(e) for e in runs], "boundary": boundary}
 

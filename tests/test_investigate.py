@@ -277,3 +277,14 @@ def test_evidence_cap_checked_before_copying(
     assert not paths.evidence_dir(inv.id).exists()
     linked = investigate.attach(db, inv, big, "other", copy=False)
     assert linked.path == str(big)
+
+
+def test_bisect_has_no_boundary_when_all_failures_came_first() -> None:
+    def entry(seq: int, result: str) -> Entry:
+        return Entry(
+            f"e{seq}", "i", seq, "experiment", "t", "c", result, f"a{seq}", None, None, None, 0
+        )
+
+    assert investigate.bisect([entry(1, "bad"), entry(2, "good")])["boundary"] is None
+    found = investigate.bisect([entry(1, "good"), entry(2, "bad")])["boundary"]
+    assert found and found["first_bad_after"]["anchor"] == "a2"

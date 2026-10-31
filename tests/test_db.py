@@ -65,6 +65,23 @@ def test_migration_2_adds_session_state_to_v1(tmp_path: Path) -> None:
     assert conn.execute("SELECT label FROM projects").fetchone()[0] == "kept"
 
 
+def test_migration_3_adds_investigations_to_v2(tmp_path: Path) -> None:
+    conn = sqlite3.connect(tmp_path / "v2.db", isolation_level=None)
+    migrate_to(conn, 2)
+    conn.execute("INSERT INTO session_state VALUES ('s', NULL, '{}', 0)")
+    dbmod.migrate(conn)
+    assert {"investigations", "inv_entries", "evidence", "inv_fts"} <= tables(conn)
+    assert conn.execute("SELECT count(*) FROM session_state").fetchone()[0] == 1
+    insert = (
+        "INSERT INTO investigations (id, project, title, symptom, status, created_at,"
+        " updated_at) VALUES (?, 'p', 't', 's', ?, 0, 0)"
+    )
+    conn.execute(insert, ("i1", "open"))
+    conn.execute(insert, ("i2", "paused"))
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(insert, ("i3", "open"))
+
+
 def test_backup_before_migration(tmp_path: Path) -> None:
     path = tmp_path / "old.db"
     conn = sqlite3.connect(path, isolation_level=None)

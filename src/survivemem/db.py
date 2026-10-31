@@ -106,6 +106,68 @@ CREATE INDEX session_state_project ON session_state(project, updated_at);
 """
 
 
+# Debug sessions spanning days and many Claude sessions (§14). inv_entries.rid is the explicit
+# content_rowid of inv_fts for the same VACUUM reason as memories.rid.
+SCHEMA_V3 = """
+CREATE TABLE investigations (
+  id          TEXT PRIMARY KEY,
+  project     TEXT NOT NULL,
+  checkout_id TEXT REFERENCES checkouts(id),
+  title       TEXT NOT NULL,
+  symptom     TEXT NOT NULL,
+  status      TEXT NOT NULL CHECK (status IN ('open','paused','solved','abandoned')),
+  env         TEXT,
+  root_cause  TEXT,
+  fix         TEXT,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  closed_at   INTEGER
+);
+CREATE UNIQUE INDEX investigations_one_open ON investigations(project) WHERE status = 'open';
+CREATE TABLE evidence (
+  id          TEXT PRIMARY KEY,
+  inv_id      TEXT NOT NULL REFERENCES investigations(id),
+  path        TEXT NOT NULL,
+  sha256      TEXT NOT NULL,
+  bytes       INTEGER NOT NULL,
+  tool        TEXT,
+  excerpt     TEXT NOT NULL,
+  created_at  INTEGER NOT NULL
+);
+CREATE INDEX evidence_inv ON evidence(inv_id);
+CREATE TABLE inv_entries (
+  rid         INTEGER PRIMARY KEY,
+  id          TEXT NOT NULL UNIQUE,
+  inv_id      TEXT NOT NULL REFERENCES investigations(id),
+  seq         INTEGER NOT NULL,
+  kind        TEXT NOT NULL CHECK (kind IN ('hypothesis','experiment','observation','ruled_out',
+                                            'note')),
+  text        TEXT NOT NULL,
+  command     TEXT,
+  result      TEXT CHECK (result IN ('good','bad','inconclusive')),
+  anchor      TEXT,
+  excerpt_sha TEXT,
+  refs        TEXT,
+  evidence_id TEXT REFERENCES evidence(id),
+  created_at  INTEGER NOT NULL,
+  UNIQUE (inv_id, seq)
+);
+CREATE INDEX inv_entries_command ON inv_entries(inv_id, command);
+CREATE VIRTUAL TABLE inv_fts USING fts5(
+  text, content='inv_entries', content_rowid='rid', tokenize = "unicode61 tokenchars '_-./:'");
+CREATE TRIGGER inv_entries_ai AFTER INSERT ON inv_entries BEGIN
+  INSERT INTO inv_fts(rowid, text) VALUES (new.rid, new.text);
+END;
+CREATE TRIGGER inv_entries_ad AFTER DELETE ON inv_entries BEGIN
+  INSERT INTO inv_fts(inv_fts, rowid, text) VALUES ('delete', old.rid, old.text);
+END;
+CREATE TRIGGER inv_entries_au AFTER UPDATE OF text ON inv_entries BEGIN
+  INSERT INTO inv_fts(inv_fts, rowid, text) VALUES ('delete', old.rid, old.text);
+  INSERT INTO inv_fts(rowid, text) VALUES (new.rid, new.text);
+END;
+"""
+
+
 def _migrate_1(db: sqlite3.Connection) -> None:
     for statement in _statements(SCHEMA_V1):
         db.execute(statement)
@@ -116,7 +178,12 @@ def _migrate_2(db: sqlite3.Connection) -> None:
         db.execute(statement)
 
 
-MIGRATIONS: tuple[Callable[[sqlite3.Connection], None], ...] = (_migrate_1, _migrate_2)
+def _migrate_3(db: sqlite3.Connection) -> None:
+    for statement in _statements(SCHEMA_V3):
+        db.execute(statement)
+
+
+MIGRATIONS: tuple[Callable[[sqlite3.Connection], None], ...] = (_migrate_1, _migrate_2, _migrate_3)
 SCHEMA_VERSION = len(MIGRATIONS)
 
 

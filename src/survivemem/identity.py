@@ -328,6 +328,15 @@ def resolve(
         return _resolve_location(db, loc, ids, cfg)
 
 
+def resolve_tolerant(db: sqlite3.Connection, cwd: Path, cfg: Config) -> Resolution:
+    """resolve(), falling back to a read-only lookup when the DB cannot be written."""
+    try:
+        return resolve(db, cwd, cfg)
+    except sqlite3.OperationalError as e:
+        log.warning("resolution without writes (%s)", e)
+        return resolve(db, cwd, cfg, writable=False)
+
+
 def _resolve_forced(
     db: sqlite3.Connection, forced: str, loc: Location | None, writable: bool
 ) -> Resolution:

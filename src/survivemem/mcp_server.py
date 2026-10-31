@@ -43,7 +43,7 @@ DOMAIN_ERRORS = (
 def session() -> Iterator[Session]:
     cfg = load_config()
     with closing(dbmod.connect()) as db:
-        yield db, cfg, identity.resolve(db, Path.cwd(), cfg)
+        yield db, cfg, identity.resolve_tolerant(db, Path.cwd(), cfg)
 
 
 def _project_id(db: sqlite3.Connection, res: identity.Resolution, ref: str | None) -> str | None:

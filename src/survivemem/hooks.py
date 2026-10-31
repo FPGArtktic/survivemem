@@ -89,20 +89,12 @@ def config() -> Config:
         return Config()
 
 
-def _resolve(db: sqlite3.Connection, cwd: Path, cfg: Config) -> identity.Resolution:
-    try:
-        return identity.resolve(db, cwd, cfg)
-    except sqlite3.OperationalError as e:
-        log.warning("resolution without writes (%s)", e)
-        return identity.resolve(db, cwd, cfg, writable=False)
-
-
 @contextmanager
 def session(payload: HookInput) -> Iterator[Session]:
     cfg = config()
     cwd = Path(text_field(payload, "cwd") or os.getcwd())
     with closing(dbmod.connect()) as db:
-        yield Session(db, cfg, _resolve(db, cwd, cfg))
+        yield Session(db, cfg, identity.resolve_tolerant(db, cwd, cfg))
 
 
 # ---------------------------------------------------------------------------------------------

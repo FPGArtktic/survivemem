@@ -108,7 +108,7 @@ class Ctx:
 
     @cached_property
     def here(self) -> identity.Resolution:
-        return identity.resolve(self.db, Path.cwd(), self.cfg)
+        return identity.resolve_tolerant(self.db, Path.cwd(), self.cfg)
 
     @cached_property
     def labels(self) -> dict[str, str]:

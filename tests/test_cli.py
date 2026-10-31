@@ -275,3 +275,16 @@ def test_entry_point_fast_path_for_hooks(
     with pytest.raises(SystemExit) as exc:
         entry.main()
     assert exc.value.code == 1 and "invalid choice" in capsys.readouterr().err
+
+
+def test_readonly_db_still_lists_inside_a_repo(run: Runner, repo: Path) -> None:
+    from survivemem import paths
+
+    run.json("add", "kept fact")
+    db_file = paths.db_path()
+    db_file.chmod(0o444)
+    db_file.parent.chmod(0o555)
+    try:
+        assert [m["content"] for m in run.json("list")] == ["kept fact"]
+    finally:
+        db_file.parent.chmod(0o755)

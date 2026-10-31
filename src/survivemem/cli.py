@@ -13,9 +13,28 @@ from pathlib import Path
 from typing import Any
 
 from survivemem import db as dbmod
-from survivemem import exchange, hooks, identity, payload, schema, state, store, version
+from survivemem import (
+    exchange,
+    hooks,
+    identity,
+    ingest,
+    investigate,
+    payload,
+    schema,
+    state,
+    store,
+    version,
+)
 from survivemem.config import Config, ConfigError, load_config
-from survivemem.model import Checkout, Memory, SessionState, hit_json, memory_json, to_json
+from survivemem.model import (
+    Checkout,
+    Investigation,
+    Memory,
+    SessionState,
+    hit_json,
+    memory_json,
+    to_json,
+)
 from survivemem.output import FORMATS, Column, Output, Record, emit_error, relative
 
 EXIT_USAGE, EXIT_NOT_FOUND, EXIT_DB, EXIT_AMBIGUOUS = 1, 2, 3, 4
@@ -692,6 +711,247 @@ def render_here(r: Record) -> str:
 
 
 # ---------------------------------------------------------------------------------------------
+# Investigations (§14)
+
+
+def _investigation(ctx: Ctx, ref: str | None = None) -> Investigation:
+    if ref:
+        return store.get_investigation(ctx.db, ref)
+    project = ctx.project_ref()
+    found = store.open_investigation_of(ctx.db, project)
+    if found is None:
+        raise store.NotFound("no open investigation in this project (inv list --all)")
+    return found
+
+
+def inv_record(ctx: Ctx, inv: Investigation, full: bool = False) -> Record:
+    data: Record = to_json(inv)
+    data["project_label"] = ctx.label(inv.project)
+    view = investigate.context(ctx.db, inv, ctx.here, _next_steps(ctx))
+    data["entries"] = len(view.entries)
+    data["rendered"] = investigate.render(view)
+    if full:
+        data["timeline"] = [to_json(e) for e in view.entries]
+        data["evidence"] = [to_json(e) for e in view.evidence.values()]
+    return data
+
+
+def _next_steps(ctx: Ctx) -> list[str]:
+    found = store.get_state(ctx.db, store.current_session(ctx.db, ctx.here.project_id))
+    return state.strings(found.state.get("next")) if found else []
+
+
+def render_inv(r: Record) -> str:
+    timeline = [
+        f"#{e['seq']:<4} {e['kind']:11} {e['result'] or '':12} {e['text']}"
+        + (f"  $ {e['command']}" if e["command"] else "")
+        for e in r.get("timeline", [])
+    ]
+    return "\n".join([r["rendered"], *(["", "TIMELINE", *timeline] if timeline else [])])
+
+
+def cmd_inv_open(ctx: Ctx) -> int:
+    a = ctx.args
+    inv = investigate.open_new(ctx.db, ctx.here, a.title, a.symptom, a.env)
+    ctx.out.record(inv_record(ctx, inv), render_inv)
+    return 0
+
+
+INV_COLUMNS = [
+    Column("id", lambda r: r["id"][:8]),
+    Column("status", lambda r: r["status"]),
+    Column("project", lambda r: r["project_label"]),
+    Column("entries", lambda r: str(r["entries"])),
+    Column("updated", lambda r: relative(r["updated_at"])),
+    Column("title", lambda r: r["title"], flex=True),
+]
+
+
+def cmd_inv_list(ctx: Ctx) -> int:
+    a = ctx.args
+    project = None if ctx.flag("all") else ctx.project_ref()
+    found = store.list_investigations(ctx.db, project, a.status, a.grep)
+    rows = []
+    for inv in found:
+        data: Record = to_json(inv)
+        data["project_label"] = ctx.label(inv.project)
+        data["entries"] = len(store.entries_of(ctx.db, inv.id))
+        rows.append(data)
+    ctx.out.records(rows, INV_COLUMNS)
+    return 0
+
+
+def cmd_inv_show(ctx: Ctx) -> int:
+    inv = _investigation(ctx, ctx.args.id)
+    ctx.out.record(inv_record(ctx, inv, full=ctx.args.full), render_inv)
+    return 0
+
+
+def cmd_inv_log(ctx: Ctx) -> int:
+    a = ctx.args
+    inv = _investigation(ctx)
+    evidence = investigate.attach(ctx.db, inv, Path(a.evidence), a.tool) if a.evidence else None
+    refs = [json.loads(r) for r in a.ref] if a.ref else None
+    new = store.NewEntry(
+        a.kind,
+        a.text,
+        a.shell_command,
+        a.result,
+        a.anchor,
+        investigate.sha256_text(evidence.excerpt) if evidence else None,
+        refs,
+        evidence.id if evidence else None,
+    )
+    entry = investigate.log_entry(ctx.db, ctx.here, inv, new)
+    ctx.out.record(to_json(entry), lambda r: f"#{r['seq']} {r['kind']} logged in {inv.id[:8]}")
+    return 0
+
+
+def cmd_inv_attach(ctx: Ctx) -> int:
+    inv = _investigation(ctx)
+    ev = investigate.attach(ctx.db, inv, Path(ctx.args.file), ctx.args.tool, not ctx.args.no_copy)
+    ctx.out.record(
+        to_json(ev), lambda r: f"attached {r['path']} ({r['bytes']} bytes)\n{r['excerpt']}"
+    )
+    return 0
+
+
+def cmd_inv_bisect(ctx: Ctx) -> int:
+    inv = _investigation(ctx, ctx.args.id)
+    table = investigate.bisect(store.entries_of(ctx.db, inv.id))
+    ctx.out.record(table, render_bisect)
+    return 0
+
+
+def render_bisect(r: Record) -> str:
+    lines = [
+        f"#{x['seq']:<4} {x['result']:12} {investigate.short_anchor(x['anchor']):14} "
+        f"{x['command'] or ''}"
+        for x in r["experiments"]
+    ] or ["no anchored experiments"]
+    b = r["boundary"]
+    if b:
+        lines.append(
+            f"boundary: last good {investigate.short_anchor(b['last_good']['anchor'])}"
+            f" (#{b['last_good']['seq']}) → first bad "
+            f"{investigate.short_anchor(b['first_bad_after']['anchor'])} "
+            f"(#{b['first_bad_after']['seq']})"
+        )
+    return "\n".join(lines)
+
+
+def cmd_inv_pause(ctx: Ctx) -> int:
+    inv = _investigation(ctx, ctx.args.id)
+    if inv.status != "open":
+        raise store.Invalid(f"investigation {inv.id} is {inv.status}, not open")
+    paused = store.set_investigation_status(ctx.db, inv.id, "paused")
+    ctx.out.record(inv_record(ctx, paused), lambda r: f"paused {r['id']}")
+    return 0
+
+
+def cmd_inv_resume(ctx: Ctx) -> int:
+    ref = ctx.args.id
+    if ref is None:
+        paused = store.list_investigations(ctx.db, ctx.project_ref(), "paused")
+        if not paused:
+            raise store.NotFound("no paused investigation in this project")
+        ref = paused[0].id
+    inv = store.get_investigation(ctx.db, ref)
+    if inv.status != "paused":
+        raise store.Invalid(f"investigation {inv.id} is {inv.status}, not paused")
+    try:
+        resumed = store.set_investigation_status(ctx.db, inv.id, "open")
+    except sqlite3.IntegrityError as e:
+        raise store.Invalid("another investigation is open in this project; pause it") from e
+    ctx.out.record(inv_record(ctx, resumed), render_inv)
+    return 0
+
+
+def cmd_inv_close(ctx: Ctx) -> int:
+    a = ctx.args
+    inv = _investigation(ctx)
+    closed, pitfall = investigate.close(ctx.db, ctx.here, inv, a.root_cause, a.fix, a.status)
+    data = inv_record(ctx, closed)
+    data["pitfall"] = memory_json(pitfall) if pitfall else None
+    ctx.out.record(
+        data,
+        lambda r: (
+            f"{r['status']} {r['id']}" + (f"; pitfall {r['pitfall']['id']}" if r["pitfall"] else "")
+        ),
+    )
+    return 0
+
+
+def cmd_inv_export(ctx: Ctx) -> int:
+    inv = _investigation(ctx, ctx.args.id)
+    sys.stdout.write(investigate.postmortem(ctx.db, inv) + "\n")
+    return 0
+
+
+LOOP_COLUMNS = [
+    Column("failures", lambda r: str(r["failures"])),
+    Column("guarded", lambda r: "yes" if r["guarded"] else "no"),
+    Column("seqs", lambda r: ",".join(f"#{s}" for s in r["seqs"])),
+    Column("anchors", lambda r: ",".join(r["anchors"])),
+    Column("command", lambda r: r["command"], flex=True),
+]
+
+
+def cmd_inv_loops(ctx: Ctx) -> int:
+    inv = _investigation(ctx, ctx.args.id)
+    rows = investigate.loops(store.entries_of(ctx.db, inv.id))
+    for row in rows:
+        row["id"] = row["command"]
+    ctx.out.records(rows, LOOP_COLUMNS, empty="(no repeated failures)")
+    return 0
+
+
+def cmd_ingest_log(ctx: Ctx) -> int:
+    """Extract → evidence + observation in the open investigation, else a candidate memory."""
+    path = Path(ctx.args.file)
+    extract = ingest.extract(path.read_text(errors="replace"), ctx.args.tool)
+    result: Record = {
+        "tool": extract.tool,
+        "tags": list(extract.tags),
+        "suggested_kind": extract.suggested_kind,
+        "excerpt": extract.excerpt,
+    }
+    inv = store.open_investigation_of(ctx.db, ctx.here.project_id)
+    if inv is not None:
+        ev = investigate.attach(ctx.db, inv, path, ctx.args.tool)
+        entry = investigate.log_entry(
+            ctx.db,
+            ctx.here,
+            inv,
+            store.NewEntry(
+                "observation",
+                f"{extract.tool} log {path.name}",
+                excerpt_sha=investigate.sha256_text(ev.excerpt),
+                evidence_id=ev.id,
+            ),
+        )
+        result |= {"stored": "evidence", "investigation": inv.id, "seq": entry.seq}
+    elif extract.excerpt:
+        m = store.add_memory(
+            ctx.db,
+            extract.excerpt,
+            "candidate",
+            project=ctx.here.project_id,
+            source="tool",
+            tags=extract.tags,
+        )
+        result |= {"stored": "candidate", "id": m.id}
+    ctx.out.record(
+        result,
+        lambda r: (
+            f"{r['excerpt']}\n-- {r['tool']} "
+            f"{','.join(r['tags'])}; stored as {r.get('stored', '-')}"
+        ),
+    )
+    return 0
+
+
+# ---------------------------------------------------------------------------------------------
 # Session state (§16)
 
 
@@ -1010,6 +1270,54 @@ def _state_commands(sub: Any, common: argparse.ArgumentParser) -> None:
     q.add_argument("--yes", action="store_true")
 
 
+def _inv_commands(
+    sub: Any, common: argparse.ArgumentParser, filters: argparse.ArgumentParser
+) -> None:
+    cf = (common, filters)
+    p = _add(sub, "inv", cmd_inv_show, "debug investigations", cf)
+    p.set_defaults(id=None, full=False)
+    inv = p.add_subparsers(dest="inv_cmd", parser_class=Parser)
+    q = _add(inv, "open", cmd_inv_open, "open an investigation (one open per project)", cf)
+    q.add_argument("title")
+    q.add_argument("--symptom", required=True)
+    q.add_argument("--env", help="extra setup text recorded with the environment snapshot")
+    q = _add(inv, "list", cmd_inv_list, "investigations of the project", cf)
+    q.add_argument("--status", choices=store.INV_STATUSES)
+    q.add_argument("--grep", help="full-text filter over entries")
+    q = _add(inv, "show", cmd_inv_show, "compact state, or --full timeline", cf)
+    q.add_argument("id", nargs="?")
+    q.add_argument("--full", action="store_true")
+    q = _add(inv, "log", cmd_inv_log, "append an entry to the open investigation", cf)
+    q.add_argument("kind", choices=store.ENTRY_KINDS)
+    q.add_argument("text")
+    q.add_argument("--command", dest="shell_command", help="the shell command an experiment runs")
+    q.add_argument("--result", choices=store.RESULTS)
+    q.add_argument("--anchor", help="commit / bitstream hash / image build id")
+    q.add_argument("--ref", action="append", help="JSON ref object, repeatable")
+    q.add_argument("--evidence", metavar="FILE", help="attach a file and link it")
+    q.add_argument("--tool", choices=ingest.TOOLS)
+    q = _add(inv, "attach", cmd_inv_attach, "copy + sha256 + excerpt → evidence", cf)
+    q.add_argument("file")
+    q.add_argument("--tool", choices=ingest.TOOLS)
+    q.add_argument("--no-copy", action="store_true")
+    for name, func, help_ in (
+        ("bisect", cmd_inv_bisect, "anchored experiments, good/bad"),
+        ("pause", cmd_inv_pause, "pause the open investigation"),
+        ("resume", cmd_inv_resume, "reopen a paused investigation"),
+        ("loops", cmd_inv_loops, "repeated identical failures"),
+        ("export", cmd_inv_export, "Markdown postmortem"),
+    ):
+        q = _add(inv, name, func, help_, cf)
+        q.add_argument("id", nargs="?")
+    q = _add(inv, "close", cmd_inv_close, "close with root cause and fix", cf)
+    q.add_argument("--root-cause", required=True)
+    q.add_argument("--fix", required=True)
+    q.add_argument("--status", choices=("solved", "abandoned"), default="solved")
+    q = _add(sub, "ingest-log", cmd_ingest_log, "extract errors from a log", cf)
+    q.add_argument("file")
+    q.add_argument("--tool", required=True, choices=ingest.TOOLS)
+
+
 def build_parser() -> Parser:
     parser = Parser(prog="survivemem", add_help=False, usage=argparse.SUPPRESS)
     parser.add_argument("--help", "-h", action="store_true")
@@ -1020,6 +1328,7 @@ def build_parser() -> Parser:
     _clone_commands(sub, common, filters)
     _project_commands(sub, common)
     _overview_commands(sub, common, filters)
+    _inv_commands(sub, common, filters)
     _state_commands(sub, common)
     _add(sub, "reindex", cmd_reindex, "rebuild FTS; recompute embeddings if vec enabled", (common,))
     _add(sub, "doctor", cmd_doctor, "integrity, FTS, vec, Ollama, hooks and MCP checks", (common,))

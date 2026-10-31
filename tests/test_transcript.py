@@ -34,3 +34,15 @@ def test_compaction_summary_is_not_a_prompt(tmp_path: Path) -> None:
         'continued from a previous conversation"}}\n'
     )
     assert transcript.user_prompts(transcript.tail(path)) == ["real prompt"]
+
+
+def test_compact_keeps_what_hooks_read() -> None:
+    from survivemem import state
+
+    full = transcript.tail(FIXTURE)
+    small = transcript.compact(full)
+    assert transcript.user_prompts(small) == transcript.user_prompts(full)
+    assert transcript.assistant_messages(small) == transcript.assistant_messages(full)
+    assert state.from_transcript(small) == state.from_transcript(full)
+    assert "tool_result" not in str(small) and "secret reasoning" not in str(small)
+    assert "old_string" not in str(small)  # Edit inputs keep file_path only

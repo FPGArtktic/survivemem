@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from functools import cache
 from importlib import resources
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 from survivemem import store
@@ -304,6 +305,67 @@ def _by_root(
     return None, "created", hint
 
 
+class NeedRoot(Exception):
+    """The daemon needs the root commit, which only the client side can compute."""
+
+
+@dataclass(frozen=True, slots=True)
+class Probe:
+    """What resolution needs from the working tree: collected locally, or sent by a hook client
+    to a daemon that cannot see the repository (Profile B)."""
+
+    location: Location | None
+    identities: tuple[str, ...]
+    root: Callable[[], str | None]
+
+
+def probe(cwd: Path, cfg: Config) -> Probe:
+    loc = collect(cwd, cfg)
+    ids = tuple(identities(loc, cfg)) if loc else ()
+    return Probe(loc, ids, lambda: root_commit(loc) if loc else None)
+
+
+def probe_to_json(p: Probe, with_root: bool) -> dict[str, Any]:
+    loc = p.location
+    data: dict[str, Any] = {"identities": list(p.identities), "location": None}
+    if loc is not None:
+        data["location"] = {
+            "root": str(loc.root),
+            "common_dir": str(loc.common_dir) if loc.common_dir else None,
+            "remotes": [list(r) for r in loc.remotes],
+            "name": loc.name,
+            "branch": loc.branch,
+            "head": loc.head,
+            "config_sha": loc.config_sha,
+        }
+    if with_root:
+        data["root"] = p.root()
+    return data
+
+
+def probe_from_json(data: dict[str, Any]) -> Probe:
+    raw = data.get("location")
+    loc = None
+    if isinstance(raw, dict):
+        loc = Location(
+            Path(raw["root"]),
+            Path(raw["common_dir"]) if raw.get("common_dir") else None,
+            tuple((str(n), str(u)) for n, u in raw.get("remotes", [])),
+            raw.get("name"),
+            raw.get("branch"),
+            raw.get("head"),
+            raw.get("config_sha"),
+        )
+    has_root, root = "root" in data, data.get("root")
+
+    def provided_root() -> str | None:
+        if not has_root:
+            raise NeedRoot
+        return str(root) if root else None
+
+    return Probe(loc, tuple(str(i) for i in data.get("identities", [])), provided_root)
+
+
 def resolve(
     db: sqlite3.Connection,
     cwd: Path,
@@ -311,21 +373,22 @@ def resolve(
     *,
     writable: bool = True,
     env: Mapping[str, str] | None = None,
+    observed: Probe | None = None,
 ) -> Resolution:
     """Resolve and record. writable=False only looks up: no new project, identity or clone row
     (for a read-only DB file, where the prompt hook must still be able to inject memories)."""
     env = os.environ if env is None else env
     forced = env.get("SURVIVEMEM_PROJECT")
-    loc = collect(cwd, cfg)
+    observed = observed or probe(cwd, cfg)
+    loc, ids = observed.location, list(observed.identities)
     if forced:
         return _resolve_forced(db, forced, loc, writable)
     if loc is None:
         return Resolution(None, "none")
-    ids = identities(loc, cfg)
     if not writable:
         return _lookup_location(db, loc, ids)
     # The history walk can take seconds on first contact; never hold the write lock over it.
-    root = None if _known_cheaply(db, loc, ids) else root_commit(loc)
+    root = None if _known_cheaply(db, loc, ids) else observed.root()
     with transaction(db):
         return _resolve_location(db, loc, ids, cfg, root)
 
@@ -338,13 +401,16 @@ def _known_cheaply(db: sqlite3.Connection, loc: Location, ids: list[str]) -> boo
     return _first_owner(db, cheap) is not None
 
 
-def resolve_tolerant(db: sqlite3.Connection, cwd: Path, cfg: Config) -> Resolution:
+def resolve_tolerant(
+    db: sqlite3.Connection, cwd: Path, cfg: Config, observed: Probe | None = None
+) -> Resolution:
     """resolve(), falling back to a read-only lookup when the DB cannot be written."""
+    observed = observed or probe(cwd, cfg)
     try:
-        return resolve(db, cwd, cfg)
+        return resolve(db, cwd, cfg, observed=observed)
     except sqlite3.OperationalError as e:
         log.warning("resolution without writes (%s)", e)
-        return resolve(db, cwd, cfg, writable=False)
+        return resolve(db, cwd, cfg, writable=False, observed=observed)
 
 
 def _resolve_forced(

@@ -327,3 +327,20 @@ def test_history_walk_happens_outside_the_write_lock(
     assert calls == [False] and first.root is not None
     resolve(db, repo)
     assert calls == [False]  # known by its remote: no second walk
+
+
+def test_probe_roundtrip_and_need_root(db: sqlite3.Connection, tmp_path: Path) -> None:
+    import json
+
+    repo = make_repo(tmp_path / "r", {"origin": "https://example.com/r.git"})
+    observed = identity.probe(repo, Config())
+    sent = json.loads(json.dumps(identity.probe_to_json(observed, with_root=False)))
+    remote = identity.probe_from_json(sent)
+    assert remote.location == observed.location and remote.identities == observed.identities
+    with pytest.raises(identity.NeedRoot):
+        identity.resolve(db, Path("/nonexistent"), Config(), env={}, observed=remote)
+    with_root = identity.probe_from_json(identity.probe_to_json(observed, with_root=True))
+    res = identity.resolve(db, Path("/nonexistent"), Config(), env={}, observed=with_root)
+    assert res.step == "created" and res.root == observed.root()
+    again = identity.resolve(db, Path("/nonexistent"), Config(), env={}, observed=remote)
+    assert again.project_id == res.project_id and again.step == "remote"

@@ -139,5 +139,34 @@ def last_todos(calls: Iterable[tuple[str, dict[str, Any]]]) -> list[dict[str, st
     return todos
 
 
+KEPT_INPUT_KEYS = ("file_path", "notebook_path", "command", "todos")
+
+
+def compact(entries: Iterable[Entry]) -> list[Entry]:
+    """What the hooks read, without tool results, thinking or file contents: the transcript a
+    remote hook client sends to the daemon (Profile B) stays small."""
+    out: list[Entry] = []
+    for entry in entries:
+        role = entry.get("type")
+        content = _content(entry, str(role)) if role in ("user", "assistant") else None
+        if content is None or (role == "user" and _blocks(content, "tool_result")):
+            continue
+        blocks: list[dict[str, Any]] = [{"type": "text", "text": _text(content)}]
+        if role == "assistant":
+            blocks += [
+                {
+                    "type": "tool_use",
+                    "name": b.get("name"),
+                    "input": {
+                        k: v for k, v in (b.get("input") or {}).items() if k in KEPT_INPUT_KEYS
+                    },
+                }
+                for b in _blocks(content, "tool_use")
+            ]
+        message = {"id": entry["message"].get("id"), "content": blocks}
+        out.append({"type": role, "message": message})
+    return out
+
+
 def last(items: list[str]) -> str:
     return items[-1] if items else ""

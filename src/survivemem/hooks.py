@@ -45,6 +45,11 @@ ERROR_LIKE = re.compile(
 )
 
 
+# Added to the payload by `survivemem hook … --remote` (Profile B): what the daemon cannot see.
+PROBE_KEY = "_survivemem_probe"
+TRANSCRIPT_KEY = "_survivemem_transcript"
+
+
 class HookInput(TypedDict, total=False):
     session_id: str
     transcript_path: str
@@ -93,8 +98,19 @@ def config() -> Config:
 def session(payload: HookInput) -> Iterator[Session]:
     cfg = config()
     cwd = Path(text_field(payload, "cwd") or os.getcwd())
+    sent = cast(dict[str, Any], payload).get(PROBE_KEY)
+    observed = identity.probe_from_json(sent) if isinstance(sent, dict) else None
     with closing(dbmod.connect()) as db:
-        yield Session(db, cfg, identity.resolve_tolerant(db, cwd, cfg))
+        yield Session(db, cfg, identity.resolve_tolerant(db, cwd, cfg, observed))
+
+
+def transcript_entries(payload: HookInput) -> list[transcript.Entry]:
+    """The transcript tail, or the compacted copy a remote hook client sent along."""
+    sent = cast(dict[str, Any], payload).get(TRANSCRIPT_KEY)
+    if isinstance(sent, list):
+        return [e for e in sent if isinstance(e, dict)]
+    path = text_field(payload, "transcript_path")
+    return transcript.tail(Path(path)) if path else []
 
 
 # ---------------------------------------------------------------------------------------------
@@ -252,8 +268,7 @@ def candidate_content(prompt: str, answer: str) -> str:
 def hook_stop(payload: HookInput) -> str:
     if cast(dict[str, Any], payload).get("stop_hook_active"):
         return ""
-    path = text_field(payload, "transcript_path")
-    entries = transcript.tail(Path(path)) if path else []
+    entries = transcript_entries(payload)
     answer = text_field(payload, "last_assistant_message")
     answer = answer or transcript.last(transcript.assistant_messages(entries))
     if not answer.strip():
@@ -282,8 +297,7 @@ def embed_backlog(s: Session) -> None:
 def hook_precompact(payload: HookInput) -> str:
     """Deterministic fallback checkpoint from the transcript, merged under the model's one."""
     sid = text_field(payload, "session_id")
-    path = text_field(payload, "transcript_path")
-    entries = transcript.tail(Path(path)) if path else []
+    entries = transcript_entries(payload)
     found = state.from_transcript(entries)
     with session(payload) as s:
         if s.cfg.compaction_summarize:

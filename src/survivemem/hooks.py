@@ -28,6 +28,8 @@ log = logging.getLogger(__name__)
 
 PROMPT_BUDGET = 6000
 SESSION_START_MEMORY_BUDGET = 3000
+STOP_EMBED_BATCH = 16
+STOP_EMBED_TIMEOUT = 2.0
 RECORD_LIMIT = 400
 SEARCH_LIMIT = 8
 CANDIDATE_PROMPT_CHARS = 300
@@ -205,7 +207,23 @@ def hook_stop(payload: HookInput) -> str:
         return ""
     with session(payload) as s:
         store_candidate(s, transcript.last(transcript.user_prompts(entries)), answer, "stop")
+        embed_backlog(s)
     return ""
+
+
+def embed_backlog(s: Session) -> None:
+    """Embeddings happen here, never in the prompt hook (§9 Stop)."""
+    if not store.has_vec_table(s.db):
+        return
+    from survivemem import embed  # httpx only when vectors are enabled
+
+    try:
+        done = embed.backfill(s.db, s.cfg, STOP_EMBED_BATCH, timeout=STOP_EMBED_TIMEOUT)
+    except sqlite3.OperationalError as e:
+        log.warning("cannot store embeddings: %s", e)
+        return
+    if done:
+        log.info("embedded %d memories", done)
 
 
 def hook_precompact(payload: HookInput) -> str:

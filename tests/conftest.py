@@ -27,7 +27,9 @@ def isolated_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gitconfig))
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     monkeypatch.setenv("NO_COLOR", "1")
-    for var in ("SURVIVEMEM_PROJECT", "SURVIVEMEM_OLLAMA_URL", "PAGER"):
+    # a closed loopback port: tests never talk to a real Ollama
+    monkeypatch.setenv("SURVIVEMEM_OLLAMA_URL", "http://127.0.0.1:9")
+    for var in ("SURVIVEMEM_PROJECT", "PAGER"):
         monkeypatch.delenv(var, raising=False)
     return tmp_path
 

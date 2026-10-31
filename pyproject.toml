@@ -29,7 +29,8 @@ vec = ["sqlite-vec>=0.1.6"]
 survivemem = "survivemem.cli:main"
 
 [dependency-groups]
-dev = ["ruff>=0.6", "mypy>=1.11", "pytest>=8"]
+# sqlite-vec is optional at runtime; installed for development so the vector path is tested.
+dev = ["ruff>=0.6", "mypy>=1.11", "pytest>=8", "sqlite-vec>=0.1.6"]
 
 [build-system]
 requires = ["hatchling>=1.26"]

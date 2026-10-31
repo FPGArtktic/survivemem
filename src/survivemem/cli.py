@@ -259,7 +259,10 @@ def md_line(r: Record) -> str:
 
 def cmd_search(ctx: Ctx) -> int:
     a = ctx.args
-    hits = store.search(ctx.db, a.query, ctx.search_view(), limit=a.limit)
+    from survivemem import embed  # httpx is only needed when searching
+
+    vector = embed.query_vector(ctx.db, a.query, ctx.cfg)
+    hits = store.search(ctx.db, a.query, ctx.search_view(), limit=a.limit, vector=vector)
     records = []
     for h in hits:
         data = hit_json(h)
@@ -544,6 +547,42 @@ def cmd_state_purge(ctx: Ctx) -> int:
 
 
 # ---------------------------------------------------------------------------------------------
+# Maintenance
+
+REINDEX_BATCH = 32
+
+
+def cmd_reindex(ctx: Ctx) -> int:
+    from survivemem import embed
+
+    store.rebuild_fts(ctx.db)
+    result: Record = {"fts": "rebuilt", "vec": "disabled", "embedded": 0}
+    if not embed.load_extension(ctx.db):
+        result["reason"] = "sqlite-vec is not installed (uv tool install 'survivemem[vec]')"
+    elif not embed.embed(["probe"], ctx.cfg, timeout=embed.BATCH_TIMEOUT):
+        result["reason"] = (
+            f"Ollama at {ctx.cfg.ollama_url} did not embed with {ctx.cfg.embed_model}"
+        )
+    else:
+        store.create_vec_table(ctx.db)
+        store.clear_vectors(ctx.db)
+        while done := embed.backfill(ctx.db, ctx.cfg, REINDEX_BATCH):
+            result["embedded"] += done
+        result["vec"] = "rebuilt"
+    ctx.out.record(result, render_reindex)
+    return 0
+
+
+def render_reindex(r: Record) -> str:
+    vec = (
+        f"vec {r['vec']}, {r['embedded']} embedded"
+        if r["vec"] == "rebuilt"
+        else (f"vec disabled: {r.get('reason')}")
+    )
+    return f"fts rebuilt; {vec}"
+
+
+# ---------------------------------------------------------------------------------------------
 # Integration
 
 
@@ -678,6 +717,7 @@ def build_parser() -> Parser:
     _clone_commands(sub, common, filters)
     _project_commands(sub, common, filters)
     _state_commands(sub, common)
+    _add(sub, "reindex", cmd_reindex, "rebuild FTS; recompute embeddings if vec enabled", (common,))
     _add(sub, "serve", cmd_serve, "MCP stdio server", ())
     p = _add(sub, "hook", cmd_hook, "Claude Code hook handler (reads JSON on stdin)", ())
     p.add_argument("event", choices=sorted(hooks.HANDLERS))

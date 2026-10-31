@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import sqlite3
+import struct
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -192,6 +193,36 @@ SQL_CHECKOUT_MARK_GONE = "UPDATE checkouts SET present = 0 WHERE id = ?"
 SQL_CHECKOUT_PURGE = (
     "DELETE FROM checkouts WHERE present = 0 AND NOT EXISTS (SELECT 1 FROM memories m"
     " WHERE m.scope = 'checkout:' || checkouts.id AND m.deleted_at IS NULL)"
+)
+
+# memory_vec exists only after `survivemem reindex` created it with sqlite-vec loaded; every
+# statement touching it needs the extension on the connection. updated_at is an auxiliary
+# column: a memory whose row is older than the memory itself is re-embedded.
+VEC_DIM = 1024
+SQL_VEC_EXISTS = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memory_vec'"
+SQL_VEC_CREATE = (
+    "CREATE VIRTUAL TABLE IF NOT EXISTS memory_vec USING vec0(memory_id TEXT PRIMARY KEY,"
+    " embedding float[1024] distance_metric=cosine, +updated_at INTEGER)"
+)
+SQL_VEC_DELETE = "DELETE FROM memory_vec WHERE memory_id = ?"
+SQL_VEC_INSERT = "INSERT INTO memory_vec (memory_id, embedding, updated_at) VALUES (?, ?, ?)"
+SQL_VEC_CLEAR = "DELETE FROM memory_vec"
+SQL_VEC_COUNT = "SELECT count(*) FROM memory_vec"
+SQL_VEC_STALE = (
+    "SELECT m.id, m.content, m.updated_at FROM memories m"
+    " LEFT JOIN memory_vec v ON v.memory_id = m.id WHERE "
+    + SQL_LIVE
+    + " AND (v.memory_id IS NULL OR v.updated_at < m.updated_at)"
+    " ORDER BY m.updated_at DESC, m.id LIMIT ?"
+)
+SQL_SEARCH_VEC = (
+    "SELECT " + MEMORY_COLS + ", v.distance AS distance FROM (SELECT memory_id, distance"
+    " FROM memory_vec WHERE embedding MATCH :vec AND k = :pool) v"
+    " JOIN memories m ON m.id = v.memory_id WHERE "
+    + SQL_LIVE
+    + " AND "
+    + SQL_VIEW
+    + " ORDER BY v.distance"
 )
 
 STATE_COLS = "session_id, project, state, updated_at"
@@ -579,8 +610,63 @@ def fuse(
     ]
 
 
-def search(db: sqlite3.Connection, query: str, view: View, limit: int = 8) -> list[Hit]:
-    return fuse(lexical_search(db, query, view), limit=limit)
+def search(
+    db: sqlite3.Connection,
+    query: str,
+    view: View,
+    limit: int = 8,
+    vector: Sequence[float] | None = None,
+) -> list[Hit]:
+    """§7: lexical ranking, fused with the cosine top-50 when a query vector is given."""
+    semantic = vector_search(db, vector, view) if vector is not None else []
+    return fuse(lexical_search(db, query, view), semantic, limit=limit)
+
+
+# ---------------------------------------------------------------------------------------------
+# Vectors (optional, §7 step 3)
+
+
+def pack_vector(vector: Sequence[float]) -> bytes:
+    if len(vector) != VEC_DIM:
+        raise Invalid(f"embedding has {len(vector)} dimensions, expected {VEC_DIM}")
+    return struct.pack(f"{VEC_DIM}f", *vector)
+
+
+def has_vec_table(db: sqlite3.Connection) -> bool:
+    return db.execute(SQL_VEC_EXISTS).fetchone() is not None
+
+
+def create_vec_table(db: sqlite3.Connection) -> None:
+    db.execute(SQL_VEC_CREATE)
+
+
+def vector_search(
+    db: sqlite3.Connection, vector: Sequence[float], view: View
+) -> list[tuple[Memory, float]]:
+    params = view.params() | {"vec": pack_vector(vector), "pool": CANDIDATE_POOL}
+    return [(_memory(row), row["distance"]) for row in db.execute(SQL_SEARCH_VEC, params)]
+
+
+def stale_vectors(db: sqlite3.Connection, limit: int) -> list[tuple[str, str, int]]:
+    """Live, non-candidate memories without an up-to-date embedding, newest first."""
+    return [(r["id"], r["content"], r["updated_at"]) for r in db.execute(SQL_VEC_STALE, (limit,))]
+
+
+def save_vectors(
+    db: sqlite3.Connection, rows: Sequence[tuple[str, int]], vectors: Sequence[Sequence[float]]
+) -> None:
+    with transaction(db):
+        for (memory_id, updated_at), vector in zip(rows, vectors, strict=True):
+            db.execute(SQL_VEC_DELETE, (memory_id,))
+            db.execute(SQL_VEC_INSERT, (memory_id, pack_vector(vector), updated_at))
+
+
+def clear_vectors(db: sqlite3.Connection) -> None:
+    db.execute(SQL_VEC_CLEAR)
+
+
+def vector_count(db: sqlite3.Connection) -> int:
+    return int(db.execute(SQL_VEC_COUNT).fetchone()[0])
 
 
 # ---------------------------------------------------------------------------------------------

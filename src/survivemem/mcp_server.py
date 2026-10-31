@@ -12,7 +12,7 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from survivemem import __version__, identity, payload, state, store
+from survivemem import __version__, embed, identity, payload, state, store
 from survivemem import db as dbmod
 from survivemem.config import Config, ConfigError, load_config
 from survivemem.model import SessionState, hit_json, iso, memory_json
@@ -70,9 +70,10 @@ def list_projects() -> dict[str, Any]:
 
 
 def search_memories(query: str, project: str | None = None, limit: int = 8) -> dict[str, Any]:
-    with session() as (db, _, res):
+    with session() as (db, cfg, res):
         view = _view(db, res, _project_id(db, res, project))
-        hits = store.search(db, query, view, limit=max(1, min(limit, 50)))
+        vector = embed.query_vector(db, query, cfg)
+        hits = store.search(db, query, view, limit=max(1, min(limit, 50)), vector=vector)
         return {"hits": [_labelled(db, hit_json(h)) for h in hits]}
 
 
@@ -116,8 +117,8 @@ def list_recent(limit: int = 20) -> dict[str, Any]:
 
 
 def memory_status() -> dict[str, Any]:
-    with session() as (db, _, res):
-        status = payload.status_payload(db)
+    with session() as (db, cfg, res):
+        status = payload.status_payload(db, cfg)
         status["version"] = __version__
         status["current_project"] = res.project.label if res.project else None
         return status
@@ -201,7 +202,8 @@ TOOLS: tuple[tuple[Tool, str], ...] = (
     ),
     (
         memory_status,
-        "READ. DB path, schema version, counts per kind, FTS health and the current project.",
+        "READ. DB path, schema version, counts per kind, FTS health, vector search state "
+        "(sqlite-vec, embeddings), Ollama reachability and the current project.",
     ),
     (
         checkpoint,

@@ -6,6 +6,7 @@ from typing import Any
 
 from survivemem import db as dbmod
 from survivemem import identity, paths, store
+from survivemem.config import Config
 from survivemem.model import Checkout, ProjectSummary, iso
 
 
@@ -60,7 +61,10 @@ def projects_payload(
     return [project_payload(db, s, here) for s in store.project_summaries(db)]
 
 
-def status_payload(db: sqlite3.Connection) -> dict[str, Any]:
+def status_payload(db: sqlite3.Connection, cfg: Config) -> dict[str, Any]:
+    from survivemem import embed  # keeps httpx out of the hook import path
+
+    vec = embed.status(db)
     path = paths.db_path()
     counts = store.kind_counts(db)
     return {
@@ -72,4 +76,15 @@ def status_payload(db: sqlite3.Connection) -> dict[str, Any]:
         "candidates": counts.get("candidate", 0),
         "projects": len(store.project_labels(db)),
         "fts_ok": store.fts_ok(db),
+        "vec": {
+            "extension": vec.extension,
+            "table": vec.table,
+            "embedded": vec.embedded,
+            "enabled": vec.extension and vec.table,
+        },
+        "ollama": {
+            "url": cfg.ollama_url,
+            "reachable": embed.ollama_reachable(cfg),
+            "embed_model": cfg.embed_model,
+        },
     }

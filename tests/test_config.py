@@ -6,7 +6,8 @@ import pytest
 from survivemem.config import Config, ConfigError, load_config
 
 
-def test_missing_file_means_defaults(tmp_path: Path) -> None:
+def test_missing_file_means_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SURVIVEMEM_OLLAMA_URL")
     assert load_config(tmp_path / "absent.toml") == Config()
 
 

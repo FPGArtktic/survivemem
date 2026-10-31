@@ -139,7 +139,7 @@ def loop_note(entries: Sequence[Entry], command: str, excerpt_sha: str | None) -
     ]
     if len(same) < LOOP_THRESHOLD:
         return None
-    marker = f"{LOOP_PREFIX}{command} "
+    marker = f"{LOOP_PREFIX}{command} failed identically "
     since = max((e.seq for e in entries if e.kind == "hypothesis"), default=0)
     if any(e.kind == "note" and e.text.startswith(marker) and e.seq > since for e in entries):
         return None
@@ -444,6 +444,23 @@ def close(
 
 def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
+
+
+VOLATILE = (
+    (re.compile(r"\[\s*\d+\.\d+\]"), "[T]"),  # dmesg timestamps
+    (re.compile(r"\b((?:log|run)\.do_\w+)\.\d+\b"), r"\1"),  # bitbake log/run file PIDs
+    (re.compile(r"\b(pid|PID)[:= ]\s*\d+"), r"\1 N"),
+    (re.compile(r"\b0x[0-9a-fA-F]{6,}\b"), "0x?"),
+    (re.compile(r"/tmp/[^\s'\"]+"), "/tmp/?"),
+)
+
+
+def excerpt_sha(excerpt: str) -> str:
+    """Identity of a failure: the excerpt without timestamps, PIDs, addresses and temp paths,
+    which differ between two runs that fail in exactly the same way."""
+    for pattern, replacement in VOLATILE:
+        excerpt = pattern.sub(replacement, excerpt)
+    return sha256_text(excerpt)
 
 
 def attach(

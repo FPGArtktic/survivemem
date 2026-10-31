@@ -469,7 +469,7 @@ def record_experiment(
         command,
         "bad" if failed else None,
         investigate.current_anchor(s.res),
-        investigate.sha256_text(extract.excerpt),
+        investigate.excerpt_sha(extract.excerpt),
         evidence_id=ev.id,
     )
     store.add_entry(s.db, inv.id, entry)

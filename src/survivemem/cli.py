@@ -865,7 +865,7 @@ def cmd_inv_log(ctx: Ctx) -> int:
         a.shell_command,
         a.result,
         a.anchor,
-        investigate.sha256_text(evidence.excerpt) if evidence else None,
+        investigate.excerpt_sha(evidence.excerpt) if evidence else None,
         refs,
         evidence.id if evidence else None,
     )
@@ -993,7 +993,7 @@ def cmd_ingest_log(ctx: Ctx) -> int:
             store.NewEntry(
                 "observation",
                 f"{extract.tool} log {path.name}",
-                excerpt_sha=investigate.sha256_text(ev.excerpt),
+                excerpt_sha=investigate.excerpt_sha(ev.excerpt),
                 evidence_id=ev.id,
             ),
         )

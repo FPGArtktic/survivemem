@@ -203,3 +203,28 @@ def test_attach_bisect_and_postmortem(
         assert heading in md
     assert "| 2 | experiment | bad | build B — `quartus_sh` | bbb |" in md
     assert f"`001-quartus-fit.log` sha256 `{ev.sha256}`" in md
+
+
+def test_excerpt_sha_ignores_pids_and_timestamps() -> None:
+    from survivemem import ingest
+
+    log = (Path(__file__).parent / "fixtures" / "logs" / "bitbake-compile.log").read_text()
+    a = ingest.extract(log, "bitbake").excerpt
+    b = ingest.extract(log.replace("log.do_compile.5678", "log.do_compile.9911"), "bitbake").excerpt
+    assert a != b and investigate.excerpt_sha(a) == investigate.excerpt_sha(b)
+    dmesg = "[    3.401220] fpga_manager fpga0: Error after writing image data to FPGA"
+    later = dmesg.replace("3.401220", "17.000001")
+    assert investigate.excerpt_sha(dmesg) == investigate.excerpt_sha(later)
+    assert investigate.excerpt_sha(dmesg) != investigate.excerpt_sha(dmesg + " (other)")
+
+
+def test_loop_note_for_one_command_does_not_hide_another(
+    db: sqlite3.Connection, res: identity.Resolution
+) -> None:
+    inv = investigate.open_new(db, res, "t", "s")
+    investigate.log_entry(
+        db, res, inv, store.NewEntry("note", "LOOP: make -j8 failed identically ×3 — #1, #2, #3")
+    )
+    for _ in range(3):
+        experiment(db, res, inv.id, "make")
+    assert investigate.loop_note(store.entries_of(db, inv.id), "make", "e1") is not None

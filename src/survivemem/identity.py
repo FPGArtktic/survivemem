@@ -280,10 +280,11 @@ def _first_owner(db: sqlite3.Connection, ids: Sequence[str]) -> Project | None:
 def _by_root(
     db: sqlite3.Connection, loc: Location, ids: Sequence[str], cfg: Config, root: str | None
 ) -> tuple[Project | None, str, str | None]:
-    """Steps 4–6: root match per root_match, path fallback, else a new project."""
+    """Steps 4–6: root match (adopt, or propose for families), path fallback, new project."""
     owner = _first_owner(db, [f"root:{root}"]) if root else None
     family = families().get(root or "")
-    mode = cfg.family_root_match.get(family, cfg.root_match) if family else cfg.root_match
+    # Kernel-sized families: forks are usually distinct projects; anything else: same project.
+    mode = cfg.family_root_match.get(family, "propose") if family else cfg.root_match
     if owner and mode == "adopt":
         return owner, "root", None
     by_path = _first_owner(db, [path_identity(loc)])
@@ -359,7 +360,12 @@ def _resolve_location(
     if loc.name:
         project, step = _first_owner(db, ids[:1]), "name"
     else:
-        project, step = _first_owner(db, [i for i in ids if i.startswith("remote:")]), "remote"
+        remotes = [i for i in ids if i.startswith("remote:")]
+        project, step = _first_owner(db, remotes), "remote"
+        if project is None and not remotes:
+            # Without remotes the path is the only cheap signal; checking it first keeps the
+            # full-history walk of `git rev-list` to the first contact.
+            project, step = _first_owner(db, [path_identity(loc)]), "path"
         if project is None:
             root = root_commit(loc)
             project, step, hint = _by_root(db, loc, ids, cfg, root)

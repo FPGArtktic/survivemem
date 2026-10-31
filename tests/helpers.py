@@ -16,7 +16,9 @@ def make_repo(path: Path, remotes: dict[str, str] | None = None, commits: int = 
     path.mkdir(parents=True, exist_ok=True)
     git(path, "init", "-q")
     for i in range(commits):
-        (path / "file.txt").write_text(f"{i}\n")
+        # the path in the content keeps root commits of unrelated test repos distinct even
+        # when they are created within the same second
+        (path / "file.txt").write_text(f"{path}\n{i}\n")
         git(path, "add", "file.txt")
         git(path, "commit", "-q", "-m", f"commit {i}")
     for name, url in (remotes or {}).items():

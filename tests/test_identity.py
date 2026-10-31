@@ -123,20 +123,28 @@ def test_subdirectory_resolves_like_root(db: sqlite3.Connection, tmp_path: Path)
     assert resolve(db, repo / "sub/dir").project_id == resolve(db, repo).project_id
 
 
-def test_root_commit_propose_and_adopt(db: sqlite3.Connection, tmp_path: Path) -> None:
+def test_fork_is_adopted_by_root_commit(db: sqlite3.Connection, tmp_path: Path) -> None:
+    src = make_repo(tmp_path / "upstream", {"origin": "https://github.com/up/tool.git"})
+    fork = clone(src, tmp_path / "fork", "https://github.com/me/tool.git")
+    first = resolve(db, src)
+    adopted = resolve(db, fork)
+    assert adopted.step == "root" and adopted.project_id == first.project_id
+    assert adopted.hint is None
+    owner = store.find_identity(db, "remote:github.com/me/tool")
+    assert owner and owner.project_id == first.project_id
+
+
+def test_fork_proposed_when_configured(db: sqlite3.Connection, tmp_path: Path) -> None:
     src = make_repo(tmp_path / "upstream", {"origin": "https://example.com/up/linux.git"})
     fork = clone(src, tmp_path / "fork", "https://example.com/vendor/linux.git")
     first = resolve(db, src)
-    proposed = resolve(db, fork)
+    proposed = resolve(db, fork, Config(root_match="propose"))
     assert proposed.step == "created" and proposed.project_id != first.project_id
     assert proposed.hint and "projects alias add" in proposed.hint and first.project
     assert first.project.label in proposed.hint
-    adopt = clone(src, tmp_path / "fork2", "https://example.com/other/linux.git")
-    adopted = resolve(db, adopt, Config(root_match="adopt"))
-    assert adopted.step == "root" and adopted.project_id == first.project_id
 
 
-def test_family_adopt(
+def test_family_forks_are_proposed_by_default(
     db: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     src = make_repo(tmp_path / "u-boot", {"origin": "https://example.com/u-boot.git"})
@@ -144,9 +152,13 @@ def test_family_adopt(
     monkeypatch.setattr(identity, "families", lambda: {root: "u-boot"})
     first = resolve(db, src)
     assert first.family == "u-boot"
-    fork = clone(src, tmp_path / "u-boot-vendor", "https://example.com/vendor/u-boot.git")
+    vendor = clone(src, tmp_path / "u-boot-vendor", "https://example.com/vendor/u-boot.git")
+    proposed = resolve(db, vendor)
+    assert proposed.step == "created" and proposed.project_id != first.project_id
+    assert proposed.hint and first.project and first.project.id in proposed.hint
+    other = clone(src, tmp_path / "u-boot-other", "https://example.com/other/u-boot.git")
     cfg = Config(family_root_match={"u-boot": "adopt"})
-    assert resolve(db, fork, cfg).project_id == first.project_id
+    assert resolve(db, other, cfg).project_id == first.project_id
 
 
 def test_repo_without_remotes_falls_back_to_path(db: sqlite3.Connection, tmp_path: Path) -> None:
@@ -255,3 +267,18 @@ def test_readonly_lookup_never_writes(tmp_path: Path) -> None:
     found = identity.resolve(ro, repo, Config(), writable=False, env={})
     assert found.step == "lookup" and found.project_id == created.project_id
     assert found.checkout and created.checkout and found.checkout.id == created.checkout.id
+
+
+def test_remoteless_repo_walks_history_only_once(
+    db: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = make_repo(tmp_path / "local-only")
+    first = resolve(db, repo)
+    assert first.root is not None
+
+    def no_walk(loc: identity.Location) -> str:
+        raise AssertionError("git rev-list must not run once the path is known")
+
+    monkeypatch.setattr(identity, "root_commit", no_walk)
+    again = resolve(db, repo)
+    assert again.step == "path" and again.project_id == first.project_id

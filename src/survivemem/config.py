@@ -28,7 +28,8 @@ class ConfigError(Exception):
 @dataclass(frozen=True, slots=True)
 class Config:
     identity_remote: str = "origin"
-    root_match: str = "propose"
+    # outside families.toml; families default to "propose" (§9 step 4)
+    root_match: str = "adopt"
     hosts: Mapping[str, str] = field(default_factory=dict)
     family_root_match: Mapping[str, str] = field(default_factory=dict)
     loop_guard_mode: str = "ask"
@@ -75,7 +76,7 @@ def parse_config(doc: Mapping[str, Any]) -> Config:
     return Config(
         identity_remote=str(identity.get("remote", defaults.identity_remote)),
         root_match=_choice(
-            identity.get("root_match", "propose"), ROOT_MATCH_MODES, "identity.root_match"
+            identity.get("root_match", "adopt"), ROOT_MATCH_MODES, "identity.root_match"
         ),
         hosts={str(k): str(v) for k, v in _table(identity, "hosts").items()},
         family_root_match=_families(identity),

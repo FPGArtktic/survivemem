@@ -268,7 +268,7 @@ def _sections(ctx: Context, limit: int, keep_optional: int, tight: bool = False)
     if older > 0:
         lines.append(f"  (+{older} older)")
     lines += [
-        f"  - {shorten(e.text, limit)}  [#{e.seq}, {short_anchor(e.anchor)}]"
+        f"  - {shorten(e.text, limit)}  [#{e.seq}, {_ruled_anchor(e.anchor, tight)}]"
         for e in ruled[-RULED_OUT_KEEP:]
     ]
     if keep_optional >= 2:

@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from survivemem import transcript
+from survivemem.redact import redact
 
 TTL_MS = 14 * 86_400_000
 BUDGET = 3000
@@ -20,7 +21,9 @@ State = dict[str, Any]
 
 
 def shorten(text: str, limit: int) -> str:
-    text = " ".join(text.split())
+    """Whitespace collapsed, secrets redacted, cut at `limit` (state text comes from prompts,
+    answers and commands, which may carry tokens)."""
+    text = redact(" ".join(text.split()))
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
@@ -87,7 +90,7 @@ def from_transcript(entries: Sequence[transcript.Entry]) -> State:
             transcript.last(transcript.assistant_messages(entries)), ANSWER_CHARS
         ),
         "files": transcript.files_touched(calls, MAX_FILES),
-        "commands": transcript.bash_commands(calls),
+        "commands": [shorten(c, ITEM_CHARS) for c in transcript.bash_commands(calls)],
     }
     todos = transcript.last_todos(calls)
     if todos:

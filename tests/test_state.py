@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import json
 import sqlite3
 from pathlib import Path
 
@@ -96,3 +97,26 @@ def test_project_merge_moves_session_state(db: sqlite3.Connection) -> None:
     store.merge_projects(db, src.id, dst.id)
     moved = store.get_state(db, "s1")
     assert moved is not None and moved.project == dst.id
+
+
+def test_transcript_state_redacts_secrets() -> None:
+    token = "ghp_" + "a" * 36
+    entries = [
+        {"type": "user", "message": {"content": f"use token {token} please"}},
+        {
+            "type": "assistant",
+            "message": {
+                "id": "m",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "Bash",
+                        "input": {"command": f"curl -H 'Authorization: {token}' x"},
+                    },
+                    {"type": "text", "text": f"done with {token}"},
+                ],
+            },
+        },
+    ]
+    found = state.from_transcript(entries)
+    assert token not in json.dumps(found) and "[REDACTED]" in found["commands"][0]

@@ -1,0 +1,22 @@
+# Docker / podman compose equivalent of deploy/survivemem.container.
+#   docker compose -f deploy/compose.yaml up -d
+services:
+  survivemem:
+    image: localhost/survivemem:latest
+    build: ..
+    command: ["serve", "--http", "--bind", "0.0.0.0:8765"]
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      # a named volume keeps the DB off network home directories; the host CLI then has to
+      # run inside the container: docker compose exec survivemem survivemem <command>
+      - survivemem-data:/data
+    environment:
+      # Ollama must listen on an address the container can reach (OLLAMA_HOST=0.0.0.0, firewalled),
+      # host-gateway does not reach the host's 127.0.0.1
+      SURVIVEMEM_OLLAMA_URL: http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+volumes:
+  survivemem-data:

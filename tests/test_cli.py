@@ -249,3 +249,10 @@ def test_state_set_show_purge(run: Runner, repo: Path) -> None:
     assert run.json("state", "purge", "--all", "--yes")["purged"] == 1
     code, _, err = run("state", "purge")
     assert code == 1 and "--yes" in err
+
+
+def test_version_flag(run: Runner) -> None:
+    with pytest.raises(SystemExit) as exc:
+        cli.run(["--version"])
+    assert exc.value.code == 0
+    assert run.capsys.readouterr().out.startswith("survivemem ")

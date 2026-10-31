@@ -12,8 +12,8 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from survivemem import __version__, embed, identity, payload, state, store
 from survivemem import db as dbmod
+from survivemem import embed, identity, payload, state, store, version
 from survivemem.config import Config, ConfigError, load_config
 from survivemem.model import SessionState, hit_json, iso, memory_json
 
@@ -119,7 +119,7 @@ def list_recent(limit: int = 20) -> dict[str, Any]:
 def memory_status() -> dict[str, Any]:
     with session() as (db, cfg, res):
         status = payload.status_payload(db, cfg)
-        status["version"] = __version__
+        status["version"] = version()
         status["current_project"] = res.project.label if res.project else None
         return status
 
@@ -234,7 +234,7 @@ def guarded[**P, R](func: Callable[P, R]) -> Callable[P, R]:
 
 
 def build_server() -> MCPServer:
-    server: MCPServer = MCPServer("survivemem", instructions=INSTRUCTIONS, version=__version__)
+    server: MCPServer = MCPServer("survivemem", instructions=INSTRUCTIONS, version=version())
     for func, description in TOOLS:
         server.tool(name=func.__name__, description=description)(guarded(func))
     return server

@@ -12,8 +12,8 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any
 
-from survivemem import __version__, hooks, identity, state, store
 from survivemem import db as dbmod
+from survivemem import hooks, identity, state, store, version
 from survivemem.config import Config, ConfigError, load_config
 from survivemem.model import Checkout, Memory, SessionState, hit_json, memory_json, to_json
 from survivemem.output import FORMATS, Column, Output, Record, emit_error, relative
@@ -55,6 +55,14 @@ Exit codes: 0 ok, 1 usage, 2 not found, 3 database, 4 ambiguous id prefix.
 
 class UsageError(Exception):
     pass
+
+
+class VersionAction(argparse.Action):
+    """--version without paying for the version lookup on every other invocation."""
+
+    def __call__(self, parser: argparse.ArgumentParser, *_: Any) -> None:
+        sys.stdout.write(f"survivemem {version()}\n")
+        parser.exit()
 
 
 class Parser(argparse.ArgumentParser):
@@ -710,7 +718,7 @@ def _state_commands(sub: Any, common: argparse.ArgumentParser) -> None:
 def build_parser() -> Parser:
     parser = Parser(prog="survivemem", add_help=False, usage=argparse.SUPPRESS)
     parser.add_argument("--help", "-h", action="store_true")
-    parser.add_argument("--version", action="version", version=f"survivemem {__version__}")
+    parser.add_argument("--version", action=VersionAction, nargs=0)
     common, filters = _common(), _filters()
     sub = parser.add_subparsers(dest="command", parser_class=Parser)
     _memory_commands(sub, common, filters)

@@ -426,7 +426,7 @@ def capture_bash(payload: HookInput) -> None:
     if not isinstance(command, str):
         return
     cfg = config()
-    if not re.search(cfg.debug_commands, command):
+    if not investigate.is_debug_command(command, cfg.debug_commands):
         return
     code, output = bash_outcome(payload)
     with session(payload) as s:

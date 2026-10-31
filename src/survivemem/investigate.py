@@ -69,6 +69,27 @@ def checkout_anchor(c: Checkout | None) -> str | None:
     return c.last_head + (f"+{c.last_config[:8]}" if c.last_config else "")
 
 
+SEGMENT_SPLIT = re.compile(r"&&|\|\||[;|()]")
+PREFIX_WORDS = frozenset({"sudo", "env", "time", "nice", "nohup", "exec"})
+ASSIGNMENT = re.compile(r"^\w+=")
+
+
+def command_words(command: str) -> list[str]:
+    """The program name of each segment of a command line, without sudo/env/VAR=… prefixes."""
+    words = []
+    for segment in SEGMENT_SPLIT.split(command):
+        tokens = [t for t in segment.split() if not t.startswith("-")]
+        while tokens and (tokens[0] in PREFIX_WORDS or ASSIGNMENT.match(tokens[0])):
+            tokens.pop(0)
+        if tokens:
+            words.append(tokens[0].rsplit("/", 1)[-1])
+    return words
+
+
+def is_debug_command(command: str, pattern: str) -> bool:
+    return any(re.fullmatch(pattern, word) for word in command_words(command))
+
+
 def current_anchor(res: identity.Resolution) -> str | None:
     return checkout_anchor(res.checkout)
 

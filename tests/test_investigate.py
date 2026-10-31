@@ -228,3 +228,27 @@ def test_loop_note_for_one_command_does_not_hide_another(
     for _ in range(3):
         experiment(db, res, inv.id, "make")
     assert investigate.loop_note(store.entries_of(db, inv.id), "make", "e1") is not None
+
+
+@pytest.mark.parametrize(
+    ("command", "debug"),
+    [
+        ("make -j8 zImage", True),
+        ("cd build && sudo -E /usr/bin/make modules", True),
+        ("ARCH=arm make dtbs 2>&1 | tail", True),
+        ("dmesg | grep fpga", True),
+        ("quartus_sh --flow compile top", True),
+        ("arm-none-eabi-gdb vmlinux", True),
+        ("nios2-download -g elf", True),
+        ("sudo dd if=x.wic of=/dev/sdb", True),
+        ("git add -A", False),
+        ("yarn add left-pad", False),
+        ("cmake --build .", False),
+        ("makepkg -si", False),
+        ("grep -rn make .", False),
+    ],
+)
+def test_is_debug_command(command: str, debug: bool) -> None:
+    from survivemem.config import DEFAULT_DEBUG_COMMANDS
+
+    assert investigate.is_debug_command(command, DEFAULT_DEBUG_COMMANDS) is debug

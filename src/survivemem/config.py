@@ -10,9 +10,11 @@ from typing import Any
 
 from survivemem import paths
 
+# Matched in full against the command word of each segment of a command line (`a && b | c`),
+# after sudo/env/VAR=… prefixes: "make" matches make and /usr/bin/make, not cmake or git add.
 DEFAULT_DEBUG_COMMANDS = (
-    r"bitbake|devtool|make|dmesg|journalctl|openocd|gdb|quartus_sh|quartus_pgm|quartus_sta"
-    r"|quartus_fit|quartus_map|jtagconfig|system-console|nios2-|niosv|bmaptool|dd\b"
+    r"bitbake|devtool|make|dmesg|journalctl|openocd|gdb|gdb-multiarch|[\w.-]+-gdb|quartus_\w+"
+    r"|jtagconfig|system-console|nios2-[\w-]+|niosv[\w-]*|bmaptool|dd"
 )
 DEFAULT_CAPTURE_TOOLS = ("mcp__jcodemunch__*", "mcp__rag__*", "mcp__jdocmunch__*")
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"

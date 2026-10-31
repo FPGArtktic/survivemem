@@ -179,3 +179,20 @@ def test_status_reports_vec_and_ollama(db: sqlite3.Connection) -> None:
     status = payload.status_payload(db, Config(ollama_url="http://127.0.0.1:9"))
     assert status["vec"]["extension"] and not status["vec"]["table"]
     assert status["ollama"]["reachable"] is False
+
+
+def test_ollama_requests_ignore_proxy_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
+    monkeypatch.setenv("ALL_PROXY", "http://127.0.0.1:9")
+    seen: list[httpx.Client] = []
+    real = httpx.Client
+
+    def spy(*args: Any, **kwargs: Any) -> httpx.Client:
+        client = real(*args, **kwargs)
+        seen.append(client)
+        return client
+
+    monkeypatch.setattr(httpx, "Client", spy)
+    embed.embed(["x"], LOCAL, timeout=0.2)
+    embed.ollama_reachable(LOCAL)
+    assert seen and all(not c.trust_env for c in seen)

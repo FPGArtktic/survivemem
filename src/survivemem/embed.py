@@ -60,7 +60,9 @@ def _post(
         log.warning("refusing non-loopback Ollama URL %s", cfg.ollama_url)
         return None
     try:
-        with httpx.Client(base_url=cfg.ollama_url, timeout=timeout, transport=transport) as c:
+        with httpx.Client(
+            base_url=cfg.ollama_url, timeout=timeout, transport=transport, trust_env=False
+        ) as c:  # HTTP_PROXY must not see memory text
             response = c.post(path, json=body)
             response.raise_for_status()
             data = response.json()
@@ -140,7 +142,9 @@ def ollama_reachable(cfg: Config, transport: httpx.BaseTransport | None = None) 
     if not is_loopback(cfg.ollama_url):
         return False
     try:
-        with httpx.Client(base_url=cfg.ollama_url, timeout=QUERY_TIMEOUT, transport=transport) as c:
+        with httpx.Client(
+            base_url=cfg.ollama_url, timeout=QUERY_TIMEOUT, transport=transport, trust_env=False
+        ) as c:
             return c.get("/api/version").status_code == 200
     except httpx.HTTPError:
         return False

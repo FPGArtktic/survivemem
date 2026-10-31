@@ -246,6 +246,14 @@ SQL_STATE_TOUCH = (
     " ON CONFLICT(session_id) DO UPDATE SET project = coalesce(excluded.project,"
     " session_state.project), updated_at = excluded.updated_at"
 )
+SQL_STATE_COUNT_PROMPT = (
+    "INSERT INTO session_state (" + STATE_COLS + ") VALUES (:sid, :project, '{\"_prompts\": 1}',"
+    " :now) ON CONFLICT(session_id) DO UPDATE SET project = coalesce(excluded.project,"
+    " session_state.project), state = json_set(session_state.state, '$._prompts',"
+    " coalesce(json_extract(session_state.state, '$._prompts'), 0) + 1),"
+    " updated_at = excluded.updated_at RETURNING json_extract(state, '$._prompts')"
+)
+SQL_ANY_OPEN_INVESTIGATION = "SELECT 1 FROM investigations WHERE status = 'open' LIMIT 1"
 SQL_STATE_LATEST = (
     "SELECT " + STATE_COLS + " FROM session_state WHERE project IS ?"
     " ORDER BY updated_at DESC, session_id LIMIT 1"
@@ -1019,6 +1027,18 @@ def save_state(
 def touch_session(db: sqlite3.Connection, session_id: str, project: str | None) -> None:
     """Mark the session as the most recently active one of its project."""
     db.execute(SQL_STATE_TOUCH, {"sid": session_id, "project": project, "now": now_ms()})
+
+
+def count_prompt(db: sqlite3.Connection, session_id: str, project: str | None) -> int:
+    """Touch the session and return how many prompts it has seen, this one included."""
+    row = db.execute(
+        SQL_STATE_COUNT_PROMPT, {"sid": session_id, "project": project, "now": now_ms()}
+    ).fetchone()
+    return int(row[0])
+
+
+def any_open_investigation(db: sqlite3.Connection) -> bool:
+    return db.execute(SQL_ANY_OPEN_INVESTIGATION).fetchone() is not None
 
 
 def latest_state(db: sqlite3.Connection, project: str | None) -> SessionState | None:

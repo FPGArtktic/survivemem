@@ -6,6 +6,7 @@ PreToolUse/PostToolUse. Everything else goes to hooks.log. A hook never fails: t
 run() logs the traceback and exits 0.
 """
 
+import fnmatch
 import json
 import logging
 import os
@@ -13,21 +14,26 @@ import re
 import sqlite3
 import time
 from collections.abc import Callable, Iterator
-from contextlib import closing, contextmanager
+from contextlib import closing, contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TextIO, TypedDict, cast
 
 from survivemem import db as dbmod
-from survivemem import identity, logfile, state, store, transcript
+from survivemem import identity, ingest, investigate, logfile, state, store, transcript
 from survivemem.config import Config, ConfigError, load_config
-from survivemem.model import Checkout, Hit
+from survivemem.model import Checkout, Hit, Investigation
 from survivemem.redact import contains_secret
 
 log = logging.getLogger(__name__)
 
 PROMPT_BUDGET = 6000
 SESSION_START_MEMORY_BUDGET = 3000
+INVESTIGATION_EVERY = 20
+POSTTOOL_CANDIDATE_CAP = 50
+MCP_DIGEST_CHARS = 300
+MCP_REFS = 5
+EXIT_CODE = re.compile(r"Exit code (\d+)")
 STOP_EMBED_BATCH = 16
 STOP_EMBED_TIMEOUT = 2.0
 RECORD_LIMIT = 400
@@ -49,6 +55,11 @@ class HookInput(TypedDict, total=False):
     last_assistant_message: str
     trigger: str
     source: str
+    tool_name: str
+    tool_input: dict[str, Any]
+    tool_response: Any
+    tool_use_id: str
+    error: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,11 +191,61 @@ def purge_old_states(s: Session) -> None:
 def hook_prompt(payload: HookInput) -> str:
     prompt = text_field(payload, "prompt")
     with session(payload) as s:
-        touch(s, payload)
+        count = count_prompt(s, payload)
         head = [x for x in (identity.checkout_line(s.db, s.res), s.res.hint) if x]
+        head += investigation_block(
+            s, payload, full=count <= 1 or (count - 1) % INVESTIGATION_EVERY == 0
+        )
         budget = PROMPT_BUDGET - sum(len(x) + 1 for x in head)
         block = render_memories(s, relevant(s, prompt), budget) if prompt else ""
     return "\n".join([*head, block] if block else head)
+
+
+def count_prompt(s: Session, payload: HookInput) -> int:
+    """Prompts seen by this session, this one included; 1 when it cannot be recorded."""
+    sid = text_field(payload, "session_id")
+    if not sid:
+        return 1
+    try:
+        return store.count_prompt(s.db, sid, s.res.project_id)
+    except sqlite3.OperationalError as e:
+        log.warning("cannot record session %s: %s", sid, e)
+        return 1
+
+
+def investigation_block(s: Session, payload: HookInput, full: bool) -> list[str]:
+    """§14 re-injection: the full rendering on the first prompt of a session and every 20th
+    after it, one line in between (plus the blocker, which must stay visible)."""
+    inv = store.open_investigation_of(s.db, s.res.project_id)
+    if inv is None:
+        return []
+    found = store.get_state(s.db, text_field(payload, "session_id"))
+    next_steps = state.strings(found.state.get("next")) if found else []
+    ctx = investigate.context(s.db, inv, s.res, next_steps)
+    sync_blockers(s, payload, investigate.blocker(ctx.entries))
+    if full:
+        return [
+            "<survivemem-investigation>",
+            investigate.render(ctx),
+            "</survivemem-investigation>",
+        ]
+    block = investigate.blocker(ctx.entries)
+    return [investigate.one_liner(inv), *([f"BLOCKER   {block}"] if block else [])]
+
+
+def sync_blockers(s: Session, payload: HookInput, current: str | None) -> None:
+    """A loop blocker leaves session_state once a hypothesis has answered it."""
+    sid = text_field(payload, "session_id")
+    found = store.get_state(s.db, sid) if sid else None
+    if found is None:
+        return
+    blockers = state.strings(found.state.get("blockers"))
+    kept = [b for b in blockers if not b.startswith(investigate.LOOP_PREFIX) or b == current]
+    if kept != blockers:
+        try:
+            store.save_state(s.db, sid, s.res.project_id, found.state | {"blockers": kept})
+        except sqlite3.OperationalError as e:
+            log.warning("cannot update blockers: %s", e)
 
 
 def candidate_content(prompt: str, answer: str) -> str:
@@ -288,13 +349,245 @@ def hook_session_start(payload: HookInput) -> str:
         touch(s, payload)
         found = store.get_state(s.db, sid) if sid else None
         st = found.state if found else {}
+        inv_block = investigation_block(s, payload, full=True)
         parts = [
+            *inv_block,
             identity.checkout_line(s.db, s.res, always=True),
             state.render(st),
             render_memories(s, startup_hits(s, st), SESSION_START_MEMORY_BUDGET),
+            investigate.CLOSING_LINE if inv_block else "",
         ]
         purge_old_states(s)
     return "\n".join(p for p in parts if p)
+
+
+def tool_input(payload: HookInput) -> dict[str, Any]:
+    value = cast(dict[str, Any], payload).get("tool_input")
+    return value if isinstance(value, dict) else {}
+
+
+def hook_pretool(payload: HookInput) -> str:
+    """Loop guard (§9 PreToolUse): only while the project has an open investigation."""
+    command = tool_input(payload).get("command")
+    if not isinstance(command, str) or not command.strip():
+        return ""
+    with closing(dbmod.connect()) as db:
+        if not store.any_open_investigation(db):  # the common case: no git calls at all
+            return ""
+    with session(payload) as s:
+        inv = store.open_investigation_of(s.db, s.res.project_id)
+        if inv is None:
+            return ""
+        normalised = investigate.normalise_command(command, investigate.workspace_of(s.res))
+        evidence = {e.id: e for e in store.evidence_of(s.db, inv.id)}
+        verdict = investigate.guard(
+            store.entries_of(s.db, inv.id), normalised, investigate.current_anchor(s.res), evidence
+        )
+        mode = s.cfg.loop_guard_mode
+    return json.dumps(pretool_output(verdict, mode)) if verdict else ""
+
+
+def pretool_output(verdict: investigate.Verdict, mode: str) -> dict[str, Any]:
+    """ask/deny carry a permission decision; warn and "seen as" only add context. They never
+    answer "allow": that would skip the user's normal permission prompt for the command."""
+    if not verdict.blocking or mode == "warn":
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "additionalContext": verdict.message,
+            }
+        }
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny" if mode == "deny" else "ask",
+            "permissionDecisionReason": verdict.message,
+        }
+    }
+
+
+def hook_posttool(payload: HookInput) -> str:
+    name = text_field(payload, "tool_name")
+    if name == "Bash":
+        capture_bash(payload)
+    elif name.startswith("mcp__"):
+        capture_mcp(payload, name)
+    return ""
+
+
+def bash_outcome(payload: HookInput) -> tuple[int, str]:
+    """(exit code, output). PostToolUse fires for successful calls only; a failed one arrives as
+    PostToolUseFailure whose `error` reads 'Exit code N\n<output>'."""
+    error = text_field(payload, "error")
+    if text_field(payload, "hook_event_name") == "PostToolUseFailure" or error:
+        found = EXIT_CODE.search(error)
+        return (int(found.group(1)) if found else 1), error
+    response = cast(dict[str, Any], payload).get("tool_response")
+    if isinstance(response, dict):
+        streams = (response.get("stdout"), response.get("stderr"))
+        return 0, "\n".join(str(x) for x in streams if x)
+    return 0, str(response or "")
+
+
+def capture_bash(payload: HookInput) -> None:
+    command = tool_input(payload).get("command")
+    if not isinstance(command, str):
+        return
+    cfg = config()
+    if not re.search(cfg.debug_commands, command):
+        return
+    code, output = bash_outcome(payload)
+    with session(payload) as s:
+        inv = store.open_investigation_of(s.db, s.res.project_id)
+        if inv is None and code == 0:
+            return
+        normalised = investigate.normalise_command(command, investigate.workspace_of(s.res))
+        extract = ingest.extract(output, ingest.detect_tool(normalised))
+        if inv is None:
+            content = f"$ {normalised} → exit {code}\n{extract.excerpt}"
+            capped_candidate(s, payload, content, "hook", (*extract.tags, "posttool"))
+            return
+        record_experiment(s, payload, inv, normalised, code, output, extract)
+
+
+def record_experiment(
+    s: Session,
+    payload: HookInput,
+    inv: Investigation,
+    command: str,
+    code: int,
+    output: str,
+    extract: ingest.Extract,
+) -> None:
+    """Evidence (excerpt only) + experiment/observation entry; a third identical failure adds
+    a LOOP note and makes it the session's blocker."""
+    ev = store.add_evidence(
+        s.db,
+        inv.id,
+        f"bash:{text_field(payload, 'tool_use_id') or 'run'}",
+        investigate.sha256_text(output),
+        len(output.encode()),
+        extract.tool,
+        extract.excerpt,
+    )
+    failed = code != 0
+    entry = store.NewEntry(
+        "experiment" if failed else "observation",
+        f"{command} → exit {code}",
+        command,
+        "bad" if failed else None,
+        investigate.current_anchor(s.res),
+        investigate.sha256_text(extract.excerpt),
+        evidence_id=ev.id,
+    )
+    store.add_entry(s.db, inv.id, entry)
+    note = investigate.loop_note(store.entries_of(s.db, inv.id), command, entry.excerpt_sha)
+    if note is None:
+        return
+    store.add_entry(s.db, inv.id, store.NewEntry("note", note))
+    sid = text_field(payload, "session_id")
+    if sid:
+        found = store.get_state(s.db, sid)
+        current = found.state if found else {}
+        store.save_state(s.db, sid, s.res.project_id, current | {"blockers": [note]})
+
+
+def capture_mcp(payload: HookInput, name: str) -> None:
+    """A pointer to what a RAG / code-index tool answered, never the payload itself."""
+    cfg = config()
+    if not any(fnmatch.fnmatchcase(name, pattern) for pattern in cfg.capture_tools):
+        return
+    server = name.split("__")[1] if name.count("__") >= 2 else "mcp"
+    args = tool_input(payload)
+    query = next(
+        (
+            str(args[k])
+            for k in ("query", "symbol", "symbol_id", "action", "path", "file_path", "doc_id")
+            if args.get(k)
+        ),
+        "",
+    )
+    response = cast(dict[str, Any], payload).get("tool_response")
+    digest = shorten(response_text(response), MCP_DIGEST_CHARS)
+    content = shorten(f"{name} {query} → {digest}", MCP_DIGEST_CHARS)
+    with session(payload) as s:
+        capped_candidate(
+            s, payload, content, "tool", ("mcp", server), refs=result_refs(response, server) or None
+        )
+
+
+def response_text(response: Any) -> str:
+    if isinstance(response, str):
+        return response
+    if isinstance(response, list):
+        return " ".join(response_text(r) for r in response)
+    if isinstance(response, dict):
+        if isinstance(response.get("content"), list):
+            return response_text(response["content"])
+        if isinstance(response.get("text"), str):
+            return str(response["text"])
+    return json.dumps(response, ensure_ascii=False, default=str)[:2000]
+
+
+def result_refs(response: Any, server: str) -> list[dict[str, Any]]:
+    """symbol / doc pointers found in the result (§15 refs), at most five."""
+    refs: list[dict[str, Any]] = []
+    stack: list[Any] = [response]
+    while stack and len(refs) < MCP_REFS:
+        item = stack.pop()
+        if isinstance(item, str) and item[:1] in "{[":
+            with suppress(ValueError):  # text that merely starts like JSON carries no refs
+                stack.append(json.loads(item))
+        elif isinstance(item, list):
+            stack.extend(reversed(item))
+        elif isinstance(item, dict):
+            ref = _ref(item, server)
+            if ref and ref not in refs:
+                refs.append(ref)
+            stack.extend(reversed(list(item.values())))
+    return refs
+
+
+def _ref(item: dict[str, Any], server: str) -> dict[str, Any] | None:
+    path = item.get("file") or item.get("path") or item.get("file_path")
+    symbol = item.get("symbol") or item.get("name")
+    if isinstance(path, str) and isinstance(symbol, str):
+        return {"type": "symbol", "tool": server, "path": path, "symbol": symbol}
+    if item.get("doc_id"):
+        ref = {"type": "doc", "tool": server, "doc_id": str(item["doc_id"])}
+        if item.get("chunk") is not None:
+            ref["chunk"] = item["chunk"]
+        return ref
+    return None
+
+
+def capped_candidate(
+    s: Session,
+    payload: HookInput,
+    content: str,
+    source: str,
+    tags: tuple[str, ...],
+    refs: list[dict[str, Any]] | None = None,
+) -> None:
+    """At most 50 candidates per session from PostToolUse; then stop and log once."""
+    sid = text_field(payload, "session_id") or "unknown"
+    found = store.get_state(s.db, sid)
+    current = found.state if found else {}
+    written = int(current.get("_posttool_candidates", 0))
+    if written >= POSTTOOL_CANDIDATE_CAP:
+        if written == POSTTOOL_CANDIDATE_CAP:
+            log.warning("posttool: %d candidates in session %s, not writing more", written, sid)
+            store.save_state(
+                s.db, sid, s.res.project_id, current | {"_posttool_candidates": written + 1}
+            )
+        return
+    if contains_secret(content):
+        log.info("posttool: candidate skipped, content looks like it contains a secret")
+        return
+    store.add_memory(
+        s.db, content, "candidate", project=s.res.project_id, source=source, tags=tags, refs=refs
+    )
+    store.save_state(s.db, sid, s.res.project_id, current | {"_posttool_candidates": written + 1})
 
 
 HANDLERS: dict[str, Callable[[HookInput], str]] = {
@@ -302,6 +595,8 @@ HANDLERS: dict[str, Callable[[HookInput], str]] = {
     "stop": hook_stop,
     "precompact": hook_precompact,
     "session-start": hook_session_start,
+    "pretool": hook_pretool,
+    "posttool": hook_posttool,
 }
 
 

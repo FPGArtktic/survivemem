@@ -6,7 +6,7 @@ import secrets
 import sqlite3
 import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 from survivemem import paths
@@ -183,6 +183,19 @@ def migrate(db: sqlite3.Connection) -> int:
     return SCHEMA_VERSION
 
 
+def backup_before_migration(db: sqlite3.Connection, path: Path) -> Path | None:
+    """memory.db.bak-<version> before upgrading a populated DB; downgrade = restore that file.
+    An existing backup of the same version is kept: it is the one taken before the first try."""
+    current = schema_version(db)
+    if not 0 < current < SCHEMA_VERSION:
+        return None
+    target = path.with_name(f"{path.name}.bak-{current}")
+    if not target.exists():
+        with closing(sqlite3.connect(target)) as copy:
+            db.backup(copy)
+    return target
+
+
 def _is_writable(path: Path) -> bool:
     if path.exists():
         return os.access(path, os.W_OK) and os.access(path.parent, os.W_OK)
@@ -202,6 +215,7 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
         db.execute("PRAGMA synchronous=NORMAL")
         db.execute("PRAGMA foreign_keys=ON")
         db.execute("PRAGMA busy_timeout=5000")
+        backup_before_migration(db, path)
         migrate(db)
     except sqlite3.Error as e:
         raise DBError(f"{path}: {e}") from e

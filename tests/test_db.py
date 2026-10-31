@@ -2,6 +2,7 @@
 import os
 import re
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -62,6 +63,21 @@ def test_migration_2_adds_session_state_to_v1(tmp_path: Path) -> None:
     dbmod.migrate(conn)
     assert dbmod.schema_version(conn) >= 2 and "session_state" in tables(conn)
     assert conn.execute("SELECT label FROM projects").fetchone()[0] == "kept"
+
+
+def test_backup_before_migration(tmp_path: Path) -> None:
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path, isolation_level=None)
+    migrate_to(conn, 1)
+    conn.execute("INSERT INTO projects VALUES ('p1', 'kept', 0)")
+    conn.close()
+    dbmod.connect(path).close()
+    with closing(sqlite3.connect(tmp_path / "old.db.bak-1")) as backup:
+        assert dbmod.schema_version(backup) == 1
+        assert backup.execute("SELECT label FROM projects").fetchone()[0] == "kept"
+    assert not (tmp_path / "fresh.db.bak-0").exists()
+    dbmod.connect(tmp_path / "fresh.db").close()
+    assert sorted(p.name for p in tmp_path.glob("*.bak-*")) == ["old.db.bak-1"]
 
 
 def test_newer_schema_is_refused(tmp_path: Path) -> None:

@@ -1,0 +1,4 @@
+id        kind         project    updated  tags        content
+01JB4K00  environment  yocto-bsp  2d ago   env         MACHINE=cyclone5 [branch socfpga-6.6]
+01JB4K00  decision     yocto-bsp  7d ago   bsp,kernel  Kernel pinned to 6.6 LTS; vendor BSP breaks on 6.12.
+01JB4K00  preference   global     40d ago              Prefers terse answers. No emojis.

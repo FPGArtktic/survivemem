@@ -1,13 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """JSON payloads shared by the CLI (--json) and the MCP server, so both say the same thing."""
 
+import json
 import sqlite3
+from pathlib import Path
 from typing import Any
 
 from survivemem import db as dbmod
 from survivemem import identity, paths, store
 from survivemem.config import Config
-from survivemem.model import Checkout, ProjectSummary, iso
+from survivemem.model import Checkout, ProjectSummary, iso, memory_json
 
 
 def checkout_payload(c: Checkout, current_id: str | None) -> dict[str, Any]:
@@ -87,4 +89,87 @@ def status_payload(db: sqlite3.Connection, cfg: Config) -> dict[str, Any]:
             "reachable": embed.ollama_reachable(cfg),
             "embed_model": cfg.embed_model,
         },
+    }
+
+
+HOOK_EVENTS = {
+    "UserPromptSubmit": "prompt",
+    "PreToolUse": "pretool",
+    "PostToolUse": "posttool",
+    "PostToolUseFailure": "posttool",
+    "Stop": "stop",
+    "PreCompact": "precompact",
+    "SessionStart": "session-start",
+}
+
+
+def _json_file(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _hook_commands(settings: dict[str, Any], event: str) -> list[str]:
+    hooks = settings.get("hooks")
+    groups = hooks.get(event, []) if isinstance(hooks, dict) else []
+    return [
+        str(h.get("command", ""))
+        for g in groups
+        if isinstance(g, dict)
+        for h in g.get("hooks", [])
+        if isinstance(h, dict)
+    ]
+
+
+def _mcp_registered(cwd: Path) -> bool:
+    """User scope and per-project entries in ~/.claude.json, and the project's .mcp.json."""
+    user = _json_file(Path.home() / ".claude.json")
+    scopes = [user, _json_file(cwd / ".mcp.json")]
+    projects = user.get("projects")
+    if isinstance(projects, dict):
+        scopes += [p for p in projects.values() if isinstance(p, dict)]
+    return any(
+        isinstance(s.get("mcpServers"), dict) and "survivemem" in s["mcpServers"] for s in scopes
+    )
+
+
+def integration_payload(cwd: Path) -> dict[str, Any]:
+    """Which Claude Code settings files register survivemem hooks, and whether MCP is set up."""
+    home = Path.home()
+    files = [
+        home / ".claude/settings.json",
+        cwd / ".claude/settings.json",
+        cwd / ".claude/settings.local.json",
+    ]
+    settings = [(f, _json_file(f)) for f in files]
+    hooks = {
+        event: any(
+            f"survivemem hook {name}" in c for _, s in settings for c in _hook_commands(s, event)
+        )
+        for event, name in HOOK_EVENTS.items()
+    }
+    return {
+        "hooks": hooks,
+        "mcp": _mcp_registered(cwd),
+        "settings_files": [str(f) for f, s in settings if s],
+    }
+
+
+def brief_payload(
+    db: sqlite3.Connection, here: identity.Resolution, cfg: Config, view: store.View
+) -> dict[str, Any]:
+    """The one call an AI client makes to orient itself (§10.4)."""
+    recent = store.list_memories(db, view, limit=20)
+    labels = store.project_labels(db)
+    return {
+        "projects": projects_payload(db, here),
+        "current_project": here.project.label if here.project else None,
+        "recent": [
+            memory_json(m) | {"project_label": labels.get(m.project or "", "global")}
+            for m in recent
+        ],
+        "candidates": len(store.list_memories(db, view, kind="candidate")),
+        "status": status_payload(db, cfg),
     }

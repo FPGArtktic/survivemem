@@ -1,0 +1,10 @@
+id       01JB4K0000000000000000000B
+kind     environment
+project  yocto-bsp (01JB0000000000000000000BSP)
+scope    branch:socfpga-6.6 [branch socfpga-6.6]
+source   cli
+tags     env
+created  2026-10-24T07:33:20Z
+updated  2026-10-24T07:33:20Z
+
+MACHINE=cyclone5

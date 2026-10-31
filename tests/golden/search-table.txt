@@ -1,0 +1,2 @@
+id        score   kind      project    updated  tags        content
+01JB4K00  0.0164  decision  yocto-bsp  7d ago   bsp,kernel  Kernel pinned to 6.6 LTS; vendor BSP breaks on 6.12.

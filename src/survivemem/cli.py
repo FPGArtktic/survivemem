@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from survivemem import db as dbmod
-from survivemem import hooks, identity, state, store, version
+from survivemem import hooks, identity, payload, schema, state, store, version
 from survivemem.config import Config, ConfigError, load_config
 from survivemem.model import Checkout, Memory, SessionState, hit_json, memory_json, to_json
 from survivemem.output import FORMATS, Column, Output, Record, emit_error, relative
@@ -219,6 +219,74 @@ def ref_commands(refs: Sequence[dict[str, Any]]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------------------------
+# Overview: status, brief, schema
+
+
+def cmd_status(ctx: Ctx) -> int:
+    data = payload.status_payload(ctx.db, ctx.cfg)
+    data["integration"] = payload.integration_payload(Path.cwd())
+    data["profile"] = "A (native)"
+    data["per_project"] = [
+        {
+            "id": s.project.id,
+            "label": s.project.label,
+            "memories": s.memories,
+            "candidates": s.candidates,
+        }
+        for s in store.project_summaries(ctx.db)
+    ]
+    ctx.out.record(data, render_status)
+    return 0
+
+
+def render_status(r: Record) -> str:
+    vec, ollama, hooks_ = r["vec"], r["ollama"], r["integration"]["hooks"]
+    counts = ", ".join(f"{k} {n}" for k, n in r["counts"].items()) or "none"
+    missing = [e for e, ok in hooks_.items() if not ok]
+    lines = [
+        f"db        {r['db_path']} ({r['db_bytes']} bytes, schema v{r['schema_version']})",
+        f"memories  {r['memories']} ({counts}); candidates {r['candidates']}; "
+        f"projects {r['projects']}",
+        f"fts       {'ok' if r['fts_ok'] else 'BROKEN, run: survivemem reindex'}",
+        f"vec       {'enabled' if vec['enabled'] else 'disabled'} (sqlite-vec "
+        f"{'loaded' if vec['extension'] else 'missing'}, {vec['embedded']} embedded)",
+        f"ollama    {ollama['url']} {'reachable' if ollama['reachable'] else 'unreachable'}",
+        f"hooks     {len(hooks_) - len(missing)}/{len(hooks_)} registered"
+        + (f"; missing: {', '.join(missing)}" if missing else ""),
+        f"mcp       {'registered' if r['integration']['mcp'] else 'not registered'}",
+        f"profile   {r['profile']}",
+    ]
+    lines += [
+        f"  {p['label']:24} {p['memories']:6} memories {p['candidates']:5} candidates"
+        for p in r["per_project"]
+    ]
+    return "\n".join(lines)
+
+
+def cmd_brief(ctx: Ctx) -> int:
+    data = payload.brief_payload(ctx.db, ctx.here, ctx.cfg, ctx.list_view())
+    ctx.out.record(data, render_brief)
+    return 0
+
+
+def render_brief(r: Record) -> str:
+    lines = [f"current project: {r['current_project'] or '(none, global scope)'}", "projects:"]
+    lines += [
+        f"  {p['label']} ({p['id'][:8]}): {p['memories']} memories, {p['candidates']} candidates"
+        for p in r["projects"]
+    ] or ["  -"]
+    lines.append(f"recent ({len(r['recent'])}):")
+    lines += [f"  {md_line(m)[2:]}" for m in r["recent"]] or ["  -"]
+    lines.append(f"open candidates: {r['candidates']} (survivemem review)")
+    return "\n".join(lines)
+
+
+def cmd_schema(ctx: Ctx) -> int:
+    ctx.out.write(json.dumps(schema.document(), indent=2, ensure_ascii=False))
+    return 0
+
+
+# ---------------------------------------------------------------------------------------------
 # Memory commands
 
 
@@ -288,6 +356,36 @@ def cmd_search(ctx: Ctx) -> int:
 
 def _num(value: float | None) -> str:
     return "-" if value is None else f"{value:.3f}"
+
+
+def cmd_show(ctx: Ctx) -> int:
+    m = store.get_memory_including_deleted(ctx.db, ctx.args.id)
+    ctx.out.record(memory_record(ctx, m), lambda r: memory_detail(ctx, r))
+    return 0
+
+
+def cmd_edit(ctx: Ctx) -> int:
+    a = ctx.args
+    edit = store.Edit(
+        content=a.content,
+        kind=a.kind,
+        add_tags=tuple(a.add_tag or ()),
+        rm_tags=tuple(a.rm_tag or ()),
+        project=store.get_project(ctx.db, a.project).id if a.project else None,
+        make_global=bool(a.global_),
+        scope=identity.scope_for(ctx.here, a.scope) if a.scope else None,
+        refs=[json.loads(r) for r in a.ref] if a.ref else None,
+        anchor=a.anchor,
+    )
+    m = store.edit_memory(ctx.db, a.id, edit)
+    ctx.out.record(memory_record(ctx, m), lambda r: memory_detail(ctx, r))
+    return 0
+
+
+def cmd_restore(ctx: Ctx) -> int:
+    m = store.restore_memory(ctx.db, ctx.args.id)
+    ctx.out.record(memory_record(ctx, m), lambda r: f"restored {r['id']}")
+    return 0
 
 
 def cmd_forget(ctx: Ctx) -> int:
@@ -433,6 +531,106 @@ def render_clone_diff(r: Record) -> str:
         lines.append(f"\nmemories scoped to {r[side]['id']}:")
         lines += [f"  [{m['id'][:8]}] {m['content']}" for m in r[side]["memories"]] or ["  -"]
     return "\n".join(lines)
+
+
+PROJECT_COLUMNS = [
+    Column("id", lambda r: r["id"][:8]),
+    Column("label", lambda r: r["label"] + (" *" if r["current"] else "")),
+    Column("primary remote", lambda r: r["primary_identity"] or "-", flex=True),
+    Column("memories", lambda r: str(r["memories"])),
+    Column("candidates", lambda r: str(r["candidates"])),
+    Column("last activity", lambda r: relative(r["last_activity"])),
+]
+
+
+def cmd_projects(ctx: Ctx) -> int:
+    rows = payload.projects_payload(ctx.db, ctx.here)
+    ctx.out.records(rows, PROJECT_COLUMNS, md=markdown_projects)
+    return 0
+
+
+def markdown_projects(rows: Sequence[Record]) -> str:
+    return "\n".join(
+        f"- **{r['label']}** ({r['id']}) — {r['memories']} memories, "
+        f"{r['candidates']} candidates, {r['primary_identity'] or 'no remote'}"
+        for r in rows
+    )
+
+
+def cmd_projects_show(ctx: Ctx) -> int:
+    project = store.get_project(ctx.db, ctx.args.project_ref)
+    summary = next(s for s in store.project_summaries(ctx.db) if s.project.id == project.id)
+    data = payload.project_payload(ctx.db, summary, ctx.here)
+    data["identities"] = [to_json(i) for i in store.identities_of(ctx.db, project.id)]
+    data["links"] = list(store.linked_projects(ctx.db, project.id))
+    view = store.View((project.id,), include_global=False)
+    data["recent"] = [memory_record(ctx, m) for m in store.list_memories(ctx.db, view, limit=10)]
+    ctx.out.record(data, render_project)
+    return 0
+
+
+def render_project(r: Record) -> str:
+    lines = [
+        f"{r['label']} ({r['id']})" + (f"  family {r['family']}" if r["family"] else ""),
+        f"memories {r['memories']}, candidates {r['candidates']}, "
+        f"last activity {relative(r['last_activity'])}",
+        "identities:",
+    ]
+    lines += [f"  {i['kind']:7} {i['identity']}" for i in r["identities"]] or ["  -"]
+    lines.append("clones:")
+    lines += [
+        f"  {identity.abbrev_home(c['path'])} @{c['branch'] or 'detached'}"
+        + (f" ({c['label']})" if c["label"] else "")
+        + ("" if c["present"] else " [gone]")
+        for c in r["checkouts"]
+    ] or ["  -"]
+    lines.append("recent memories:")
+    lines += [f"  {md_line(m)[2:]}" for m in r["recent"]] or ["  -"]
+    return "\n".join(lines)
+
+
+def cmd_projects_rename(ctx: Ctx) -> int:
+    p = store.rename_project(ctx.db, ctx.args.project_ref, ctx.args.label)
+    ctx.out.record(to_json(p), lambda r: f"{r['id']} is now {r['label']!r}")
+    return 0
+
+
+def cmd_projects_merge(ctx: Ctx) -> int:
+    src = store.get_project(ctx.db, ctx.args.src)
+    dst = store.get_project(ctx.db, ctx.args.dst)
+    if not ctx.confirm(f"Merge {src.label} ({src.id[:8]}) into {dst.label} ({dst.id[:8]})?"):
+        return EXIT_USAGE
+    merged = store.merge_projects(ctx.db, src.id, dst.id)
+    ctx.out.record(to_json(merged), lambda r: f"merged into {r['label']} ({r['id']})")
+    return 0
+
+
+IDENTITY_COLUMNS = [
+    Column("kind", lambda r: r["kind"]),
+    Column("identity", lambda r: r["identity"], flex=True),
+    Column("added", lambda r: relative(r["added_at"])),
+]
+
+
+def cmd_projects_identities(ctx: Ctx) -> int:
+    project = store.get_project(ctx.db, ctx.args.project_ref)
+    rows = [to_json(i) for i in store.identities_of(ctx.db, project.id)]
+    ctx.out.records(rows, IDENTITY_COLUMNS)
+    return 0
+
+
+def cmd_alias_add(ctx: Ctx) -> int:
+    found = store.alias_add(
+        ctx.db, ctx.args.project_ref, ctx.args.identity, steal=bool(ctx.flag("yes"))
+    )
+    ctx.out.record(to_json(found), lambda r: f"{r['identity']} → {r['project_id']}")
+    return 0
+
+
+def cmd_alias_rm(ctx: Ctx) -> int:
+    found = store.alias_rm(ctx.db, ctx.args.identity)
+    ctx.out.record(to_json(found), lambda r: f"removed {r['identity']}")
+    return 0
 
 
 def cmd_projects_here(ctx: Ctx) -> int:
@@ -668,6 +866,21 @@ def _memory_commands(
     p.add_argument("--limit", type=int, default=8)
     p.add_argument("--explain", action="store_true", help="print bm25 / vec score per hit")
     _add(sub, "review", cmd_review, "promote or discard candidates (interactive)", (filters,))
+    p = _add(sub, "show", cmd_show, "full record incl. tags, refs, timestamps", (common,))
+    p.add_argument("id")
+    p = _add(sub, "edit", cmd_edit, "change a memory", (common,))
+    p.add_argument("id")
+    p.add_argument("--content")
+    p.add_argument("--kind", choices=dbmod.KINDS)
+    p.add_argument("--add-tag", action="append")
+    p.add_argument("--rm-tag", action="append")
+    p.add_argument("--project", metavar="NAME|ID")
+    p.add_argument("--global", dest="global_", action="store_true")
+    p.add_argument("--scope", help="project, branch, checkout")
+    p.add_argument("--ref", action="append", help="JSON ref object, replaces refs")
+    p.add_argument("--anchor")
+    p = _add(sub, "restore", cmd_restore, "undo forget", (common,))
+    p.add_argument("id")
     p = _add(sub, "forget", cmd_forget, "soft-delete memories", (common,))
     p.add_argument("ids", nargs="+")
     p.add_argument("--yes", action="store_true")
@@ -689,12 +902,44 @@ def _clone_commands(
     q.add_argument("b")
 
 
-def _project_commands(
+def _project_commands(sub: Any, common: argparse.ArgumentParser) -> None:
+    c = (common,)
+    p = _add(sub, "projects", cmd_projects, "list projects", c)
+    projects = p.add_subparsers(dest="projects_cmd", parser_class=Parser)
+    _add(projects, "here", cmd_projects_here, "resolution chain for $PWD", c)
+    q = _add(projects, "show", cmd_projects_show, "details, identities, recent memories", c)
+    q.add_argument("project_ref", metavar="id|label")
+    q = _add(projects, "rename", cmd_projects_rename, "change a project's label", c)
+    q.add_argument("project_ref", metavar="id|label")
+    q.add_argument("label")
+    q = _add(projects, "merge", cmd_projects_merge, "move memories and identities, drop src", c)
+    q.add_argument("src")
+    q.add_argument("dst")
+    q.add_argument("--yes", action="store_true")
+    q = _add(projects, "identities", cmd_projects_identities, "identities of a project", c)
+    q.add_argument("project_ref", metavar="id|label")
+    q = _add(projects, "alias", cmd_projects_identities, "manage identities", c)
+    alias = q.add_subparsers(dest="alias_cmd", parser_class=Parser, required=True)
+    r = _add(alias, "add", cmd_alias_add, "attach remote:/root:/path:/name: to a project", c)
+    r.add_argument("project_ref", metavar="id|label")
+    r.add_argument("identity")
+    r.add_argument("--yes", action="store_true", help="take it from another project")
+    r = _add(alias, "rm", cmd_alias_rm, "forget an identity", c)
+    r.add_argument("identity")
+
+
+def _overview_commands(
     sub: Any, common: argparse.ArgumentParser, filters: argparse.ArgumentParser
 ) -> None:
-    p = _add(sub, "projects", cmd_projects_here, "projects", (common,))
-    projects = p.add_subparsers(dest="projects_cmd", parser_class=Parser)
-    _add(projects, "here", cmd_projects_here, "resolution chain for $PWD", (common,))
+    _add(
+        sub,
+        "status",
+        cmd_status,
+        "DB, counts, FTS/vec/Ollama, hooks and MCP registration",
+        (common,),
+    )
+    _add(sub, "brief", cmd_brief, "compact summary for an AI client", (common, filters))
+    _add(sub, "schema", cmd_schema, "JSON Schema of memory, project and checkpoint", ())
 
 
 def _state_commands(sub: Any, common: argparse.ArgumentParser) -> None:
@@ -723,7 +968,8 @@ def build_parser() -> Parser:
     sub = parser.add_subparsers(dest="command", parser_class=Parser)
     _memory_commands(sub, common, filters)
     _clone_commands(sub, common, filters)
-    _project_commands(sub, common, filters)
+    _project_commands(sub, common)
+    _overview_commands(sub, common, filters)
     _state_commands(sub, common)
     _add(sub, "reindex", cmd_reindex, "rebuild FTS; recompute embeddings if vec enabled", (common,))
     _add(sub, "serve", cmd_serve, "MCP stdio server", ())

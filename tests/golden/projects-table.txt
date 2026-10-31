@@ -1,0 +1,2 @@
+id        label      primary remote          memories  candidates  last activity
+01JB0000  yocto-bsp  remote:example.com/bsp  2         0           2d ago

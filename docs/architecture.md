@@ -9,7 +9,8 @@ binary serves three audiences:
   stdio, one process per client session;
 - **people and scripts**: every other subcommand, with human and JSON output.
 
-All three open the same SQLite file directly. There is no daemon.
+All three open the same SQLite file directly (Profile A). Profile B puts one daemon in
+front of the file instead; see [deployment.md](deployment.md).
 
 ## Components
 
@@ -204,6 +205,6 @@ flowchart TB
 - The only network peer is an optional Ollama on loopback. Non-loopback Ollama URLs are
   refused.
 
-A second deployment profile (a long-lived daemon in a container, MCP over loopback
-HTTP, hooks as thin HTTP clients) is planned but not available yet; `survivemem doctor`
-and `status` report the active profile, which is always `A (native)` today.
+Profile B (a long-lived daemon in a container, MCP over loopback HTTP, hooks as thin HTTP
+clients) is described with its own deployment and sequence diagrams in
+[deployment.md](deployment.md); `survivemem doctor` reports which profile is active.

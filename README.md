@@ -65,9 +65,6 @@ It is built around three problems that show up in long engineering sessions:
 
 - Shared memories committed in a repository (`[share]` in the configuration is parsed
   but not used).
-- A second deployment profile: a long-lived daemon in a container with an HTTP MCP
-  transport and hooks as thin HTTP clients. Today hooks, CLI and MCP server always open
-  the database directly.
 
 ## Requirements
 
@@ -226,6 +223,22 @@ Bash call ──► hook pretool ──► loop guard (only with an open investi
 - [docs/investigations.md](docs/investigations.md): debug sessions, the loop guard, log extraction
 - [docs/mcp.md](docs/mcp.md): MCP registration and tools
 - [docs/data-model.md](docs/data-model.md): the SQLite schema
+
+## Daemon in a container (optional)
+
+By default hooks, CLI and MCP server open the database directly. Profile B runs one
+long-lived daemon instead (MCP over Streamable HTTP on `127.0.0.1:8765`, hooks as thin
+clients with `--remote`, a bearer token next to the DB), packaged as a rootless Podman
+Quadlet unit:
+
+```sh
+podman build -t localhost/survivemem:latest .
+cp deploy/survivemem.container ~/.config/containers/systemd/
+systemctl --user daemon-reload && systemctl --user start survivemem
+```
+
+When the daemon is down, `--remote` hooks fall back to the database. Setup, diagrams,
+security model and limitations: [docs/deployment.md](docs/deployment.md).
 
 ## Investigations
 

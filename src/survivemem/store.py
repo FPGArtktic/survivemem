@@ -653,8 +653,18 @@ def _fts_match(terms: Sequence[str]) -> str:
     return " OR ".join(f'"{t}"*' if len(t) >= 3 else f'"{t}"' for t in terms)
 
 
+IDENTIFIER_HINT = re.compile(r"[_\-./:0-9]")
+TRIGRAM_MIN_PLAIN = 6
+
+
 def _tri_match(terms: Sequence[str]) -> str | None:
-    usable = [f'"{t}"' for t in terms if len(t) >= 3]
+    """Substring search is for identifiers (PTR_AUTH inside CONFIG_ARM64_PTR_AUTH). Short plain
+    words match inside unrelated ones ("uart" in "Quartus", "use" in "because")."""
+    usable = [
+        f'"{t}"'
+        for t in terms
+        if len(t) >= 3 and (IDENTIFIER_HINT.search(t) or len(t) >= TRIGRAM_MIN_PLAIN)
+    ]
     return " OR ".join(usable) if usable else None
 
 

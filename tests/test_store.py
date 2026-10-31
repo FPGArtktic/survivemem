@@ -290,3 +290,11 @@ def test_secret_command_and_ambiguous_merge_refused(db: sqlite3.Connection) -> N
         )
     with pytest.raises(store.Invalid, match="open investigation"):
         store.merge_projects(db, a.id, b.id)
+
+
+def test_trigram_skips_short_plain_words(db: sqlite3.Connection) -> None:
+    add(db, "Quartus fitter needs the LogicLock region removed")
+    add(db, "Kernel pinned because the vendor BSP breaks")
+    assert store.search(db, "UART speed", store.ALL) == []
+    assert store.search(db, "which version do we use", store.ALL) == []
+    assert store.search(db, "gicLock", store.ALL)[0].matched_by == ("trigram",)

@@ -288,6 +288,64 @@ def cmd_forget(ctx: Ctx) -> int:
     return 0
 
 
+REVIEW_KINDS = {
+    "f": "fact",
+    "p": "preference",
+    "d": "decision",
+    "t": "pitfall",
+    "v": "environment",
+    "j": "project",
+}
+REVIEW_MENU = (
+    "f fact · p preference · d decision · t pitfall · v environment · j project"
+    " · e edit · x discard · s skip · q quit"
+)
+
+
+def cmd_review(ctx: Ctx) -> int:
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        raise UsageError("review is interactive; script with list --kind candidate and edit --kind")
+    candidates = store.list_memories(ctx.db, ctx.list_view(), kind="candidate")
+    tally = review(ctx, candidates, input, print)
+    print(", ".join(f"{k}: {v}" for k, v in tally.items()) or "no candidates")
+    return 0
+
+
+def review(
+    ctx: Ctx, candidates: Sequence[Memory], ask: Callable[[str], str], say: Callable[[str], None]
+) -> dict[str, int]:
+    tally = {"promoted": 0, "discarded": 0, "skipped": 0}
+    for i, m in enumerate(candidates, 1):
+        say(
+            f"\n[{i}/{len(candidates)}] {m.id[:8]}  {ctx.label(m.project)}  "
+            f"{relative(m.created_at)}\n{m.content}\n{REVIEW_MENU}"
+        )
+        outcome = review_one(ctx, m, ask, say)
+        if outcome == "quit":
+            break
+        tally[outcome] += 1
+    return tally
+
+
+def review_one(ctx: Ctx, m: Memory, ask: Callable[[str], str], say: Callable[[str], None]) -> str:
+    content = m.content
+    while True:
+        key = ask("> ").strip().lower()[:1]
+        if key in REVIEW_KINDS:
+            store.edit_memory(ctx.db, m.id, store.Edit(content=content, kind=REVIEW_KINDS[key]))
+            return "promoted"
+        if key == "e":
+            content = ask("new text: ").strip() or content
+            say(content)
+        elif key == "x":
+            store.forget_memory(ctx.db, m.id)
+            return "discarded"
+        elif key in ("s", ""):
+            return "skipped"
+        elif key == "q":
+            return "quit"
+
+
 # ---------------------------------------------------------------------------------------------
 # Clones and projects here
 
@@ -501,6 +559,7 @@ def _memory_commands(
     p.add_argument("query")
     p.add_argument("--limit", type=int, default=8)
     p.add_argument("--explain", action="store_true", help="print bm25 / vec score per hit")
+    _add(sub, "review", cmd_review, "promote or discard candidates (interactive)", (filters,))
     p = _add(sub, "forget", cmd_forget, "soft-delete memories", (common,))
     p.add_argument("ids", nargs="+")
     p.add_argument("--yes", action="store_true")

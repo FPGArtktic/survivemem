@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import json
 import shutil
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -181,6 +182,36 @@ def test_outside_project(run: Runner, tmp_path: Path, monkeypatch: pytest.Monkey
     assert run.json("add", "global by default")["project"] is None
     code, _, err = run("clones")
     assert code == 1 and "--project" in err
+
+
+def test_review_promotes_edits_discards(run: Runner, repo: Path) -> None:
+    import argparse
+
+    from survivemem import db as dbmod
+    from survivemem import store
+    from survivemem.output import Output
+
+    with closing(dbmod.connect()) as db:
+        for text in ("first", "second", "third", "fourth"):
+            store.add_memory(db, text, "candidate", source="hook")
+    ctx = cli.Ctx(argparse.Namespace(all=True), Output("json"))
+    answers = iter(["?", "d", "e", "second, reworded", "f", "x", "q"])
+    candidates = store.list_memories(ctx.db, store.ALL, kind="candidate")
+    said: list[str] = []
+    tally = cli.review(
+        ctx, sorted(candidates, key=lambda m: m.content), lambda _: next(answers), said.append
+    )
+    assert tally == {"promoted": 2, "discarded": 1, "skipped": 0}
+    kinds = {m.content: m.kind for m in store.list_memories(ctx.db, store.ALL)}
+    assert kinds == {"first": "decision", "second, reworded": "fact"}
+    assert [m.content for m in store.list_memories(ctx.db, store.ALL, kind="candidate")] == [
+        "third"
+    ]
+
+
+def test_review_refuses_without_tty(run: Runner, repo: Path) -> None:
+    code, _, err = run("review")
+    assert code == 1 and "interactive" in err
 
 
 def test_hook_command_reads_stdin(run: Runner, repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:

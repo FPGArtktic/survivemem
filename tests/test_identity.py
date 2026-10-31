@@ -236,3 +236,22 @@ def test_checkout_line(
     assert line is not None
     assert line.startswith("linux-de10 · this clone ~/w/linux-de10 @main (")
     assert ".config " in line and line.endswith("· others: ~/w/linux-up @main")
+
+
+def test_readonly_lookup_never_writes(tmp_path: Path) -> None:
+    import os
+
+    from survivemem import db as dbmod
+
+    repo = make_repo(tmp_path / "r", {"origin": "https://example.com/r.git"})
+    path = tmp_path / "ro.db"
+    conn = dbmod.connect(path)
+    assert identity.resolve(conn, repo, Config(), writable=False, env={}).project is None
+    assert conn.execute("SELECT count(*) FROM projects").fetchone()[0] == 0
+    created = identity.resolve(conn, repo, Config(), env={})
+    conn.close()
+    os.chmod(path, 0o444)
+    ro = dbmod.connect(path)
+    found = identity.resolve(ro, repo, Config(), writable=False, env={})
+    assert found.step == "lookup" and found.project_id == created.project_id
+    assert found.checkout and created.checkout and found.checkout.id == created.checkout.id

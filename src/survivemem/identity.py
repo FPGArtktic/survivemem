@@ -304,29 +304,56 @@ def resolve(
     cwd: Path,
     cfg: Config,
     *,
-    record: bool = True,
+    writable: bool = True,
     env: Mapping[str, str] | None = None,
 ) -> Resolution:
+    """Resolve and record. writable=False only looks up: no new project, identity or clone row
+    (for a read-only DB file, where the prompt hook must still be able to inject memories)."""
     env = os.environ if env is None else env
     forced = env.get("SURVIVEMEM_PROJECT")
     loc = collect(cwd, cfg)
     if forced:
-        project = store.find_project(db, forced)
-        with transaction(db):
-            if project is None:
-                project = store.create_project(db, forced)
-                store.attach_identities(db, project.id, [f"name:{forced}"])
-            checkout = _record(db, project, loc) if record and loc else None
-        return Resolution(project, "env", loc, checkout=checkout)
+        return _resolve_forced(db, forced, loc, writable)
     if loc is None:
         return Resolution(None, "none")
     ids = identities(loc, cfg)
+    if not writable:
+        return _lookup_location(db, loc, ids)
     with transaction(db):
-        return _resolve_location(db, loc, ids, cfg, record)
+        return _resolve_location(db, loc, ids, cfg)
+
+
+def _resolve_forced(
+    db: sqlite3.Connection, forced: str, loc: Location | None, writable: bool
+) -> Resolution:
+    project = store.find_project(db, forced)
+    if not writable:
+        return Resolution(project, "env", loc, checkout=_existing_checkout(db, loc))
+    with transaction(db):
+        if project is None:
+            project = store.create_project(db, forced)
+            store.attach_identities(db, project.id, [f"name:{forced}"])
+        checkout = _record(db, project, loc) if loc else None
+    return Resolution(project, "env", loc, checkout=checkout)
+
+
+def _lookup_location(db: sqlite3.Connection, loc: Location, ids: list[str]) -> Resolution:
+    project = _first_owner(db, ids)
+    step = "lookup" if project else "none"
+    return Resolution(project, step, loc, tuple(ids), checkout=_existing_checkout(db, loc))
+
+
+def _existing_checkout(db: sqlite3.Connection, loc: Location | None) -> Checkout | None:
+    if loc is None:
+        return None
+    try:
+        return store.get_checkout_by_path(db, str(loc.root))
+    except store.NotFound:
+        return None
 
 
 def _resolve_location(
-    db: sqlite3.Connection, loc: Location, ids: list[str], cfg: Config, record: bool
+    db: sqlite3.Connection, loc: Location, ids: list[str], cfg: Config
 ) -> Resolution:
     root, hint = None, None
     if loc.name:
@@ -340,9 +367,15 @@ def _resolve_location(
         project, step = store.create_project(db, loc.name or loc.root.name), "created"
     attach = [*ids, f"root:{root}"] if root else ids
     store.attach_identities(db, project.id, attach)
-    checkout = _record(db, project, loc) if record else None
     return Resolution(
-        project, step, loc, tuple(attach), root, families().get(root or ""), hint, checkout
+        project,
+        step,
+        loc,
+        tuple(attach),
+        root,
+        families().get(root or ""),
+        hint,
+        _record(db, project, loc),
     )
 
 

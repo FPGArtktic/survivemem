@@ -13,9 +13,9 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from survivemem import db as dbmod
-from survivemem import embed, identity, payload, state, store, version
+from survivemem import embed, identity, investigate, payload, state, store, version
 from survivemem.config import Config, ConfigError, load_config
-from survivemem.model import SessionState, hit_json, iso, memory_json
+from survivemem.model import Investigation, SessionState, hit_json, iso, memory_json, to_json
 
 log = logging.getLogger(__name__)
 
@@ -168,6 +168,54 @@ def session_state() -> dict[str, Any]:
         return _state_payload(found)
 
 
+def _inv_payload(
+    db: sqlite3.Connection, res: identity.Resolution, inv: Investigation
+) -> dict[str, Any]:
+    found = store.get_state(db, store.current_session(db, res.project_id))
+    next_steps = state.strings(found.state.get("next")) if found else []
+    ctx = investigate.context(db, inv, res, next_steps)
+    data: dict[str, Any] = to_json(inv)
+    data["entries"] = len(ctx.entries)
+    data["rendered"] = investigate.render(ctx)
+    return data
+
+
+def investigation_open(title: str, symptom: str, env: str | None = None) -> dict[str, Any]:
+    with session() as (db, _, res):
+        return _inv_payload(db, res, investigate.open_new(db, res, title, symptom, env))
+
+
+def investigation_log(
+    kind: str,
+    text: str,
+    command: str | None = None,
+    result: str | None = None,
+    anchor: str | None = None,
+    refs: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    with session() as (db, _, res):
+        inv = investigate.require_open(db, res)
+        entry = investigate.log_entry(
+            db, res, inv, store.NewEntry(kind, text, command, result, anchor, refs=refs)
+        )
+        return {"entry": to_json(entry), "investigation": inv.id}
+
+
+def investigation_status(id: str | None = None) -> dict[str, Any]:
+    with session() as (db, _, res):
+        inv = store.get_investigation(db, id) if id else investigate.require_open(db, res)
+        return _inv_payload(db, res, inv)
+
+
+def investigation_close(root_cause: str, fix: str, status: str = "solved") -> dict[str, Any]:
+    with session() as (db, _, res):
+        inv = investigate.require_open(db, res)
+        closed, pitfall = investigate.close(db, res, inv, root_cause, fix, status)
+        data = _inv_payload(db, res, closed)
+        data["pitfall"] = memory_json(pitfall) if pitfall else None
+        return data
+
+
 Tool = Callable[..., dict[str, Any]]
 
 TOOLS: tuple[tuple[Tool, str], ...] = (
@@ -216,6 +264,30 @@ TOOLS: tuple[tuple[Tool, str], ...] = (
     (
         session_state,
         "READ. The current session's checkpoint (state and its rendering), or {} when none.",
+    ),
+    (
+        investigation_open,
+        "WRITE. Open a debug investigation for the current project (one open at a time). Use "
+        "before the first experiment when a task is debugging: a symptom with an unknown cause. "
+        "Snapshots the project's environment memories; env adds free-form setup text.",
+    ),
+    (
+        investigation_log,
+        "WRITE. Append to the open investigation. kind: hypothesis, experiment, observation, "
+        "ruled_out (with a one-line reason), note. An experiment needs `command` (logged "
+        "BEFORE running it) and gets `result` good/bad/inconclusive after; anchor defaults to "
+        "the current HEAD(+.config). One entry per experiment, never a summary of several.",
+    ),
+    (
+        investigation_status,
+        "READ. Compact state of the open investigation (or `id`): symptom, setup, ruled out, "
+        "open hypotheses, last experiments, blocker, commands not to re-run. Call at the start "
+        "of any debugging task and after every compaction.",
+    ),
+    (
+        investigation_close,
+        "WRITE. Close the open investigation with root_cause and fix; status solved (default) "
+        "writes one pitfall memory pointing at it, abandoned writes none.",
     ),
 )
 

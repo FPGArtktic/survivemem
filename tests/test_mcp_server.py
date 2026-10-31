@@ -22,6 +22,10 @@ EXPECTED_TOOLS = {
     "memory_status",
     "checkpoint",
     "session_state",
+    "investigation_open",
+    "investigation_log",
+    "investigation_status",
+    "investigation_close",
 }
 
 
@@ -156,3 +160,28 @@ def test_session_state_empty_without_checkpoint(repo: Path) -> None:
         {"goal": "g", "done": [], "in_progress": "", "next": [], "decisions": [], "files": []},
     )
     assert saved["session_id"].startswith("mcp-")
+
+
+def test_investigation_tools(repo: Path) -> None:
+    assert "no open investigation" in call("investigation_status")["error"]
+    opened = call(
+        "investigation_open",
+        {"title": "UART hang", "symptom": "hangs after load", "env": "board=de10-nano"},
+    )
+    assert opened["status"] == "open" and "board=de10-nano" in opened["rendered"]
+    assert "already open" in call("investigation_open", {"title": "x", "symptom": "y"})["error"]
+    assert "command" in call("investigation_log", {"kind": "experiment", "text": "x"})["error"]
+    logged = call(
+        "investigation_log",
+        {"kind": "experiment", "text": "reload", "command": "sudo dmesg | tail", "result": "bad"},
+    )
+    assert logged["entry"]["command"] == "dmesg" and logged["entry"]["anchor"]
+    call("investigation_log", {"kind": "ruled_out", "text": "not the clock"})
+    status = call("investigation_status")
+    assert (
+        status["entries"] == 2
+        and "DO NOT RE-RUN without a new hypothesis: dmesg" in (status["rendered"])
+    )
+    assert call("investigation_status", {"id": opened["id"][:10]})["id"] == opened["id"]
+    closed = call("investigation_close", {"root_cause": "bridges off", "fix": "enable them"})
+    assert closed["status"] == "solved" and closed["pitfall"]["refs"][0]["id"] == opened["id"]

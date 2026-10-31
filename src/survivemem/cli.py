@@ -24,6 +24,7 @@ from survivemem import (
     state,
     store,
     version,
+    workspace,
 )
 from survivemem.config import Config, ConfigError, load_config
 from survivemem.model import (
@@ -652,6 +653,72 @@ def cmd_alias_rm(ctx: Ctx) -> int:
     return 0
 
 
+def cmd_projects_link(ctx: Ctx) -> int:
+    parent = store.get_project(ctx.db, ctx.args.parent)
+    child = store.get_project(ctx.db, ctx.args.child)
+    if ctx.args.projects_cmd == "unlink":
+        store.unlink_projects(ctx.db, parent.id, child.id)
+    else:
+        store.link_projects(ctx.db, parent.id, child.id)
+    data = {"parent": parent.id, "child": child.id, "linked": ctx.args.projects_cmd == "link"}
+    ctx.out.record(data, lambda r: f"{parent.label} {'→' if r['linked'] else '✕'} {child.label}")
+    return 0
+
+
+def cmd_projects_autodetect(ctx: Ctx) -> int:
+    """Propose links to the repos a bblayers.conf / kas file / repo manifest names (§15)."""
+    parent = (
+        store.get_project(ctx.db, ctx.args.project) if ctx.flag("project") else (ctx.here.project)
+    )
+    if parent is None:
+        raise UsageError("not inside a project; run in the workspace repo or pass --project")
+    root = ctx.here.location.root if ctx.here.location else Path.cwd()
+    apply = bool(ctx.flag("yes"))
+    linked = set(store.linked_projects(ctx.db, parent.id))
+    rows = []
+    for kind, path in workspace.member_dirs(root, Path.cwd()):
+        res = identity.resolve(ctx.db, path, ctx.cfg, writable=apply)
+        if res.project_id == parent.id or (res.location is None and not apply):
+            continue
+        child = res.project
+        if apply and child is not None and child.id not in linked:
+            store.link_projects(ctx.db, parent.id, child.id)
+        rows.append(
+            {
+                "id": child.id if child else "-",
+                "source": kind,
+                "path": str(path),
+                "label": child.label if child else f"{path.name} (new)",
+                "linked": apply or (child is not None and child.id in linked),
+            }
+        )
+    ctx.out.records(rows, AUTODETECT_COLUMNS, empty="(no workspace repos found)")
+    return 0
+
+
+AUTODETECT_COLUMNS = [
+    Column("source", lambda r: r["source"]),
+    Column("label", lambda r: r["label"]),
+    Column("linked", lambda r: "yes" if r["linked"] else "proposed (--yes)"),
+    Column("path", lambda r: identity.abbrev_home(r["path"]), flex=True),
+]
+
+
+ENV_COLUMNS = [
+    Column("id", lambda r: r["id"][:8]),
+    Column("key", lambda r: r["content"].partition("=")[0] if "=" in r["content"] else "-"),
+    Column("value", lambda r: r["content"].partition("=")[2] or r["content"], flex=True),
+    Column("scope", lambda r: r["scope"]),
+    Column("project", lambda r: r["project_label"]),
+]
+
+
+def cmd_env(ctx: Ctx) -> int:
+    memories = store.list_memories(ctx.db, ctx.list_view(), kind="environment")
+    ctx.out.records([memory_record(ctx, m) for m in memories], ENV_COLUMNS)
+    return 0
+
+
 def cmd_projects_here(ctx: Ctx) -> int:
     res = ctx.here
     loc = res.location
@@ -1060,6 +1127,9 @@ def cmd_doctor(ctx: Ctx) -> int:
     from survivemem import doctor
 
     checks = doctor.run_checks(ctx.db, ctx.cfg)
+    if ctx.args.stale:
+        here = ctx.here
+        checks += doctor.stale_memories(ctx.db, here.project_id, investigate.current_anchor(here))
     rows = [{"name": c.name, "level": c.level, "detail": c.detail} for c in checks]
     ctx.out.record(
         {"checks": rows, "ok": all(c.level != "fail" for c in checks)},
@@ -1236,6 +1306,19 @@ def _project_commands(sub: Any, common: argparse.ArgumentParser) -> None:
     r.add_argument("--yes", action="store_true", help="take it from another project")
     r = _add(alias, "rm", cmd_alias_rm, "forget an identity", c)
     r.add_argument("identity")
+    for name, help_ in (("link", "make two projects one workspace"), ("unlink", "undo link")):
+        q = _add(projects, name, cmd_projects_link, help_, c)
+        q.add_argument("parent")
+        q.add_argument("child")
+    q = _add(
+        projects,
+        "autodetect",
+        cmd_projects_autodetect,
+        "links from bblayers.conf / kas.yml / .repo/manifest.xml",
+        c,
+    )
+    q.add_argument("--project", metavar="NAME|ID", help="the workspace (parent) project")
+    q.add_argument("--yes", action="store_true", help="create the proposed links")
 
 
 def _overview_commands(
@@ -1250,6 +1333,7 @@ def _overview_commands(
     )
     _add(sub, "brief", cmd_brief, "compact summary for an AI client", (common, filters))
     _add(sub, "schema", cmd_schema, "JSON Schema of memory, project and checkpoint", ())
+    _add(sub, "env", cmd_env, "environment memories as KEY=value table", (common, filters))
 
 
 def _state_commands(sub: Any, common: argparse.ArgumentParser) -> None:
@@ -1331,7 +1415,10 @@ def build_parser() -> Parser:
     _inv_commands(sub, common, filters)
     _state_commands(sub, common)
     _add(sub, "reindex", cmd_reindex, "rebuild FTS; recompute embeddings if vec enabled", (common,))
-    _add(sub, "doctor", cmd_doctor, "integrity, FTS, vec, Ollama, hooks and MCP checks", (common,))
+    p = _add(
+        sub, "doctor", cmd_doctor, "integrity, FTS, vec, Ollama, hooks and MCP checks", (common,)
+    )
+    p.add_argument("--stale", action="store_true", help="memories whose anchor no longer matches")
     p = _add(sub, "export", cmd_export, "memories as JSONL (default) or Markdown", (filters,))
     p.add_argument("--format", dest="export_format", choices=EXPORT_FORMATS, default="jsonl")
     p.add_argument("--kind", choices=dbmod.KINDS)

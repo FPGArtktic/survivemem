@@ -153,3 +153,27 @@ def run_checks(db: sqlite3.Connection, cfg: Config) -> list[Check]:
 
 def describe(c: Check) -> str:
     return f"{c.level.upper():4} {c.name:11} {c.detail}"
+
+
+def stale_memories(db: sqlite3.Connection, project: str | None, anchor: str | None) -> list[Check]:
+    """--stale: memories of this project whose anchor no longer matches the current clone
+    (another head, or the same head with another .config)."""
+    if project is None or anchor is None:
+        return []
+    head, _, config = anchor.partition("+")
+    view = store.View((project,), include_global=False)
+    checks = []
+    for m in store.list_memories(db, view):
+        if not m.anchor:
+            continue
+        m_head, _, m_config = m.anchor.partition("+")
+        same_head = head.startswith(m_head) or m_head.startswith(head)
+        if not same_head or (m_config and config and m_config != config[: len(m_config)]):
+            checks.append(
+                Check(
+                    "stale",
+                    "warn",
+                    f"{m.id[:8]} anchor {m.anchor[:16]} ≠ {anchor[:16]}: {m.content[:80]}",
+                )
+            )
+    return checks

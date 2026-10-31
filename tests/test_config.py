@@ -28,6 +28,8 @@ mode = "deny"
 tools = ["mcp__rag__*"]
 [compaction]
 summarize = true
+[embed]
+keep_alive = "2h"
 [share]
 enabled = true
 """
@@ -38,7 +40,7 @@ enabled = true
     assert cfg.family_root_match == {"u-boot": "adopt"}
     assert cfg.loop_guard_mode == "deny"
     assert cfg.capture_tools == ("mcp__rag__*",)
-    assert cfg.compaction_summarize and cfg.share_enabled
+    assert cfg.compaction_summarize and cfg.share_enabled and cfg.embed_keep_alive == "2h"
 
 
 @pytest.mark.parametrize(

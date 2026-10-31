@@ -363,6 +363,9 @@ model = "llama3.2"
 [embed]
 # Ollama embedding model for vector search; must return 1024-dimensional vectors.
 model = "bge-m3"
+# How long Ollama keeps the model loaded after each request. Loading it cold takes longer
+# than the 500 ms search budget, and search then quietly falls back to FTS5 only.
+keep_alive = "30m"
 
 [loop_guard]
 # What the PreToolUse hook does with a command identical to a failed experiment at the

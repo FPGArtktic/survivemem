@@ -40,6 +40,9 @@ class Config:
     compaction_summarize: bool = False
     compaction_model: str = "llama3.2"
     embed_model: str = "bge-m3"
+    # how long Ollama keeps the model loaded after a request; a cold load takes longer than the
+    # 500 ms search budget, so vectors would silently drop out until the next warm-up
+    embed_keep_alive: str = "30m"
     share_enabled: bool = False
     ollama_url: str = DEFAULT_OLLAMA_URL
 
@@ -88,6 +91,7 @@ def parse_config(doc: Mapping[str, Any]) -> Config:
         compaction_summarize=bool(compaction.get("summarize", False)),
         compaction_model=str(compaction.get("model", defaults.compaction_model)),
         embed_model=str(embed.get("model", defaults.embed_model)),
+        embed_keep_alive=str(embed.get("keep_alive", defaults.embed_keep_alive)),
         share_enabled=bool(share.get("enabled", False)),
         ollama_url=os.environ.get("SURVIVEMEM_OLLAMA_URL", DEFAULT_OLLAMA_URL),
     )

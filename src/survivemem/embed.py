@@ -78,9 +78,12 @@ def embed(
     timeout: float = BATCH_TIMEOUT,
     transport: httpx.BaseTransport | None = None,
 ) -> list[list[float]] | None:
-    data = _post(
-        cfg, "/api/embed", {"model": cfg.embed_model, "input": list(texts)}, timeout, transport
-    )
+    body: dict[str, object] = {
+        "model": cfg.embed_model,
+        "input": list(texts),
+        "keep_alive": cfg.embed_keep_alive,
+    }
+    data = _post(cfg, "/api/embed", body, timeout, transport)
     vectors = data.get("embeddings") if data else None
     if not isinstance(vectors, list) or len(vectors) != len(texts):
         return None

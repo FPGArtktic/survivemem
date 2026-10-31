@@ -63,6 +63,7 @@ def test_embed_parses_and_validates() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         assert request.url.path == "/api/embed" and body["model"] == "bge-m3"
+        assert body["keep_alive"] == "30m"
         return httpx.Response(200, json={"embeddings": [[0.5] * 1024 for _ in body["input"]]})
 
     assert len(embed.embed(["a", "b"], LOCAL, transport=ollama(handler)) or []) == 2

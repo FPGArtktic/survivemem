@@ -1,0 +1,13 @@
+Info: *******************************************************************
+Info: Running Quartus Prime Fitter
+    Info: Version 23.1std.0 Build 991 11/28/2023 SC Lite Edition
+Info (119006): Selected device 5CSEBA6U23I7 for design "top"
+Warning (15714): Some pins have incomplete I/O assignments. Refer to the I/O Assignment Warnings report for details
+Critical Warning (169085): No exact pin location assignment(s) for 3 pins of 112 total pins. For the list of pins please refer to the I/O Assignment Warnings table in the fitter report.
+Info (170189): Fitter placement preparation operations beginning
+Error (170012): Fitter requires 45210 LABs to implement the design, but the device contains only 41910 LABs
+Info (170034): Selected device has 41910 LABs
+Error (11802): Can't fit design in device. Modify your design to reduce resources, or choose a larger device. The Intel FPGA Knowledge Database contains many articles with specific details on how to resolve this error.
+Info (144001): Generated suppressed messages file /w/fpga/output_files/top.fit.smsg
+Error: Quartus Prime Fitter was unsuccessful. 2 errors, 2 warnings
+    Error: Peak virtual memory: 2210 megabytes

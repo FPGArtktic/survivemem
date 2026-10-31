@@ -1,0 +1,7 @@
+Info: Running Quartus Prime Programmer
+Info (213045): Using programming cable "DE-SoC [1-1.2]"
+Info (213011): Using programming file output_files/top.sof with checksum 0x02A1F3C4 for device 5CSEBA6U23@2
+Info (209060): Started Programmer operation at Sat Oct 31 09:12:44 2026
+Error (209025): Can't recognize silicon ID for device 2. A device's silicon ID is different from what the Quartus Prime software expected. Verify that all hardware connections are secure, or check the device's power supply.
+Error (209012): Operation failed
+Error: Quartus Prime Programmer was unsuccessful. 2 errors, 0 warnings

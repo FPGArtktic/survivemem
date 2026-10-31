@@ -1,0 +1,27 @@
+[    0.000000] Booting Linux on physical CPU 0x0
+[    0.000000] Linux version 6.6.30-altera (oe-user@oe-host) (arm-poky-linux-gnueabi-gcc (GCC) 13.3.0) #1 SMP
+[    1.204512] fpga_manager fpga0: Altera SOCFPGA FPGA Manager registered
+[    1.310022] altera_uart ff200000.serial: probe with driver altera_uart failed with error -517
+[    2.004101] fpga-region soc:base_fpga_region: FPGA Region probed
+[    3.118734] fpga_manager fpga0: writing soc_system.rbf to Altera SOCFPGA FPGA Manager
+[    3.401220] fpga_manager fpga0: Error after writing image data to FPGA
+[    3.401300] fpga-region soc:base_fpga_region: failed to load FPGA image
+[    4.512001] 8<--- cut here ---
+[    4.512010] Unable to handle kernel paging request at virtual address ff200000
+[    4.512020] Internal error: Oops: 805 [#1] SMP ARM
+[    4.512030] Modules linked in: altera_uart
+[    4.512040] CPU: 0 PID: 123 Comm: insmod Not tainted 6.6.30-altera #1
+[    4.512050] Hardware name: Altera SOCFPGA
+[    4.512060] PC is at altera_uart_startup+0x30/0x88 [altera_uart]
+[    4.512070] LR is at uart_port_startup+0x10c/0x2a0
+[    4.512080] pc : [<bf000030>]    lr : [<c05a1b2c>]    psr: 60070013
+[    4.512090] sp : c2a63d58  ip : 00000000  fp : c2a63d74
+[    4.512100] r10: 00000000  r9 : c1d05c00  r8 : c2d3f000
+[    4.512110] Process insmod (pid: 123, stack limit = 0x(ptrval))
+[    4.512120] Backtrace:
+[    4.512130]  altera_uart_startup [altera_uart] from uart_port_startup+0x10c/0x2a0
+[    4.512140]  uart_port_startup from uart_port_activate+0x50/0x6c
+[    4.512150]  uart_port_activate from tty_port_open+0x90/0x11c
+[    4.512160]  tty_port_open from uart_open+0x1c/0x24
+[    4.512170]  uart_open from tty_open+0x108/0x478
+[    4.512180] ---[ end trace 0000000000000000 ]---

@@ -1,0 +1,14 @@
+Open On-Chip Debugger 0.12.0
+Licensed under GNU GPL v2
+Info : Listening on port 6666 for tcl connections
+Info : Listening on port 4444 for telnet connections
+Info : usb blaster interface using libftdi
+Info : This adapter doesn't support configurable speed
+Error: JTAG scan chain interrogation failed: all ones
+Error: Check JTAG interface, timings, target power, etc.
+Error: Trying to use configured scan chain anyway...
+Error: fpgasoc.cpu: IR capture error; saw 0x0f not 0x01
+Warn : Bypassing JTAG setup events due to errors
+Error: Invalid ACK (7) in DAP response
+Error: Target not examined yet
+Error: [fpgasoc.cpu.0] Examination failed, GDB will be halted. Polling again in 100ms

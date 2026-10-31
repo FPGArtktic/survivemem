@@ -1,0 +1,11 @@
+NOTE: recipe linux-socfpga-6.6.30+git-r0: task do_compile: Started
+ERROR: linux-socfpga-6.6.30+git-r0 do_compile: oe_runmake failed
+| make -C /w/build/tmp/work-shared/cyclone5/kernel-source O=/w/build/tmp/work/cyclone5-poky-linux-gnueabi/linux-socfpga/6.6.30+git/linux-cyclone5-standard-build
+|   CC      drivers/fpga/altera-fpga2sdram.o
+| drivers/fpga/altera-fpga2sdram.c:148:9: error: implicit declaration of function 'devm_fpga_bridge_register' [-Werror=implicit-function-declaration]
+|   148 |         br = devm_fpga_bridge_register(dev, F2S_BRIDGE_NAME,
+|       |              ^~~~~~~~~~~~~~~~~~~~~~~~~
+| cc1: some warnings being treated as errors
+| make[4]: *** [scripts/Makefile.build:243: drivers/fpga/altera-fpga2sdram.o] Error 1
+ERROR: Logfile of failure stored in: /w/build/tmp/work/cyclone5-poky-linux-gnueabi/linux-socfpga/6.6.30+git/temp/log.do_compile.5678
+ERROR: Task (/w/meta-intel-fpga/recipes-kernel/linux/linux-socfpga_6.6.bb:do_compile) failed with exit code '1'

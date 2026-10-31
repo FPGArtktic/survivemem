@@ -1,0 +1,12 @@
+  SYNC    include/config/auto.conf
+drivers/fpga/Kconfig:42:warning: symbol FPGA_MGR_SOCFPGA has 'select' of FPGA_BRIDGE which is not visible
+  CC      drivers/fpga/socfpga.o
+  CC      drivers/fpga/fpga-region.o
+  LD      vmlinux.o
+  MODPOST vmlinux.symvers
+ERROR: modpost: "fpga_bridge_get" [drivers/fpga/of-fpga-region.ko] undefined!
+ld: drivers/fpga/fpga-region.o: in function `fpga_region_program_fpga':
+fpga-region.c:(.text+0x1a4): undefined reference to `fpga_bridges_enable'
+make[2]: *** [scripts/Makefile.vmlinux_o:61: vmlinux.o] Error 1
+make[1]: *** [Makefile:1150: vmlinux] Error 2
+make: *** [Makefile:234: __sub-make] Error 2

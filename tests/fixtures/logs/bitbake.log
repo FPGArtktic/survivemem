@@ -1,0 +1,16 @@
+NOTE: Executing Tasks
+NOTE: Running task 4123 of 4180 (/w/poky/meta/recipes-core/images/core-image-minimal.bb:do_rootfs)
+NOTE: recipe core-image-minimal-1.0-r0: task do_rootfs: Started
+ERROR: core-image-minimal-1.0-r0 do_rootfs: Could not invoke dnf. Command '/w/build/tmp/work/cyclone5-poky-linux-gnueabi/core-image-minimal/1.0-r0/recipe-sysroot-native/usr/bin/dnf -v --rpmverbosity=info -y -c /w/build/tmp/work/cyclone5-poky-linux-gnueabi/core-image-minimal/1.0-r0/rootfs/etc/dnf/dnf.conf install packagegroup-core-boot nonexistent-pkg' returned 1:
+| DNF version: 4.19.0
+| No match for argument: nonexistent-pkg
+| Error: Unable to find a match: nonexistent-pkg
+|
+ERROR: Logfile of failure stored in: /w/build/tmp/work/cyclone5-poky-linux-gnueabi/core-image-minimal/1.0-r0/temp/log.do_rootfs.1234
+NOTE: recipe core-image-minimal-1.0-r0: task do_rootfs: Failed
+ERROR: Task (/w/poky/meta/recipes-core/images/core-image-minimal.bb:do_rootfs) failed with exit code '1'
+NOTE: Tasks Summary: Attempted 4123 tasks of which 4100 didn't need to be rerun and 1 failed.
+
+Summary: 1 task failed:
+  /w/poky/meta/recipes-core/images/core-image-minimal.bb:do_rootfs
+Summary: There was 1 ERROR message, returning a non-zero exit code.

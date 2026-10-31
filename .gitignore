@@ -1,0 +1,13 @@
+# local agent working documents, never published
+CLAUDE.md
+.claude/
+
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+dist/
+build/
+*.egg-info/

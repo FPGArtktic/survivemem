@@ -796,6 +796,18 @@ def cmd_import(ctx: Ctx) -> int:
     return EXIT_USAGE if result.errors and not result.memories_added else 0
 
 
+def cmd_doctor(ctx: Ctx) -> int:
+    from survivemem import doctor
+
+    checks = doctor.run_checks(ctx.db, ctx.cfg)
+    rows = [{"name": c.name, "level": c.level, "detail": c.detail} for c in checks]
+    ctx.out.record(
+        {"checks": rows, "ok": all(c.level != "fail" for c in checks)},
+        lambda r: "\n".join(doctor.describe(c) for c in checks),
+    )
+    return 0 if all(c.level != "fail" for c in checks) else EXIT_DB
+
+
 def cmd_reindex(ctx: Ctx) -> int:
     from survivemem import embed
 
@@ -1010,6 +1022,7 @@ def build_parser() -> Parser:
     _overview_commands(sub, common, filters)
     _state_commands(sub, common)
     _add(sub, "reindex", cmd_reindex, "rebuild FTS; recompute embeddings if vec enabled", (common,))
+    _add(sub, "doctor", cmd_doctor, "integrity, FTS, vec, Ollama, hooks and MCP checks", (common,))
     p = _add(sub, "export", cmd_export, "memories as JSONL (default) or Markdown", (filters,))
     p.add_argument("--format", dest="export_format", choices=EXPORT_FORMATS, default="jsonl")
     p.add_argument("--kind", choices=dbmod.KINDS)

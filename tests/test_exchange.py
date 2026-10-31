@@ -2,6 +2,7 @@
 import io
 import json
 import os
+import sqlite3
 import time
 from contextlib import closing
 from pathlib import Path
@@ -9,7 +10,8 @@ from pathlib import Path
 import pytest
 
 from survivemem import db as dbmod
-from survivemem import paths
+from survivemem import doctor, paths
+from survivemem.config import Config
 from tests.helpers import make_repo
 from tests.test_cli import Runner
 from tests.test_cli_browse import GOLDEN, NOW, seed_fixed
@@ -80,3 +82,40 @@ def test_export_markdown_golden(
     if os.environ.get("UPDATE_GOLDEN"):
         golden.write_text(out)
     assert code == 0 and out == golden.read_text()
+
+
+def test_doctor_reports_and_fails_on_broken_fts(
+    run: Runner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    report = run.json("doctor")
+    levels = {c["name"]: c["level"] for c in report["checks"]}
+    assert report["ok"] and levels["integrity"] == "ok" and levels["hooks"] == "warn"
+    with closing(dbmod.connect(paths.db_path())) as db:
+        db.execute("DROP TRIGGER memories_ai")
+        db.execute(
+            "INSERT INTO memories (id, content, kind, source, created_at, updated_at)"
+            " VALUES ('x', 'unindexed', 'fact', 'cli', 0, 0)"
+        )
+    code, out, _ = run("doctor", "--json")
+    assert code == 3 and not json.loads(out)["ok"]
+
+
+def test_doctor_network_fs_and_name_collision(
+    db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(doctor, "filesystem_type", lambda path: "nfs4")
+    assert doctor.check_filesystem().level == "fail"
+    db.execute("INSERT INTO projects VALUES ('p', 'bsp', 0)")
+    for ident, kind in (("name:bsp", "name"), ("root:aaa", "root"), ("root:bbb", "root")):
+        db.execute("INSERT INTO project_identities VALUES (?, 'p', ?, 0)", (ident, kind))
+    assert doctor.check_name_collisions(db).level == "warn"
+    assert {c.name for c in doctor.run_checks(db, Config(ollama_url="http://127.0.0.1:9"))} >= {
+        "integrity",
+        "fts",
+        "vec",
+        "ollama",
+        "hooks",
+        "mcp",
+        "profile",
+    }

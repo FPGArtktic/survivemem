@@ -10,8 +10,13 @@ FORMAT = "%(asctime)s %(process)d %(name)s %(levelname)s %(message)s"
 
 def configure(level: int = logging.INFO) -> None:
     path = paths.log_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handler = logging.FileHandler(path, encoding="utf-8")
+    handler: logging.Handler
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(path, encoding="utf-8")
+    except OSError:
+        # unwritable state dir, full disk, quota: a hook must still answer and exit 0
+        handler = logging.NullHandler()
     handler.setFormatter(logging.Formatter(FORMAT))
     root = logging.getLogger()
     root.handlers[:] = [handler]

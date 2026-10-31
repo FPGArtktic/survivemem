@@ -292,3 +292,10 @@ def test_session_start_on_readonly_db_still_prints(repo: Path) -> None:
     finally:
         db_file.parent.chmod(0o755)
     assert "GOAL: keep working" in out
+
+
+def test_unwritable_log_dir_does_not_break_the_hook(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", "/proc/nonexistent")
+    assert run_hook("prompt", {"prompt": "x", "cwd": str(repo)}) == ""

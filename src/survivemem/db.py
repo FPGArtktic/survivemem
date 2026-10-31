@@ -94,12 +94,29 @@ class DBError(Exception):
     pass
 
 
+# Working state that must survive context compaction: ephemeral, per session, never searched.
+SCHEMA_V2 = """
+CREATE TABLE session_state (
+  session_id  TEXT PRIMARY KEY,
+  project     TEXT,
+  state       TEXT NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+CREATE INDEX session_state_project ON session_state(project, updated_at);
+"""
+
+
 def _migrate_1(db: sqlite3.Connection) -> None:
     for statement in _statements(SCHEMA_V1):
         db.execute(statement)
 
 
-MIGRATIONS: tuple[Callable[[sqlite3.Connection], None], ...] = (_migrate_1,)
+def _migrate_2(db: sqlite3.Connection) -> None:
+    for statement in _statements(SCHEMA_V2):
+        db.execute(statement)
+
+
+MIGRATIONS: tuple[Callable[[sqlite3.Connection], None], ...] = (_migrate_1, _migrate_2)
 SCHEMA_VERSION = len(MIGRATIONS)
 
 

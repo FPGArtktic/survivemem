@@ -46,6 +46,24 @@ def test_migration_1_from_empty_file(tmp_path: Path) -> None:
     assert "memories" in tables(conn)
 
 
+def migrate_to(conn: sqlite3.Connection, version: int) -> None:
+    conn.execute(dbmod.SQL_CREATE_VERSION)
+    conn.execute(dbmod.SQL_INIT_VERSION)
+    for v in range(1, version + 1):
+        dbmod.MIGRATIONS[v - 1](conn)
+    conn.execute(dbmod.SQL_SET_VERSION, (version,))
+
+
+def test_migration_2_adds_session_state_to_v1(tmp_path: Path) -> None:
+    conn = sqlite3.connect(tmp_path / "v1.db", isolation_level=None)
+    migrate_to(conn, 1)
+    conn.execute("INSERT INTO projects VALUES ('p1', 'kept', 0)")
+    assert "session_state" not in tables(conn)
+    dbmod.migrate(conn)
+    assert dbmod.schema_version(conn) >= 2 and "session_state" in tables(conn)
+    assert conn.execute("SELECT label FROM projects").fetchone()[0] == "kept"
+
+
 def test_newer_schema_is_refused(tmp_path: Path) -> None:
     path = tmp_path / "new.db"
     conn = dbmod.connect(path)

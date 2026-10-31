@@ -24,3 +24,13 @@ def test_tail_limits_lines_and_tolerates_missing_file(tmp_path: Path) -> None:
     assert len(transcript.tail(FIXTURE, max_lines=2)) == 2
     assert transcript.tail(tmp_path / "absent.jsonl") == []
     assert transcript.last([]) == ""
+
+
+def test_compaction_summary_is_not_a_prompt(tmp_path: Path) -> None:
+    path = tmp_path / "t.jsonl"
+    path.write_text(
+        '{"type":"user","message":{"content":"real prompt"}}\n'
+        '{"type":"user","isCompactSummary":true,"message":{"content":"This session is being '
+        'continued from a previous conversation"}}\n'
+    )
+    assert transcript.user_prompts(transcript.tail(path)) == ["real prompt"]

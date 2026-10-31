@@ -13,6 +13,9 @@ from pathlib import Path
 from typing import Any
 
 TAIL_LINES = 2000
+# subagent entries, meta messages, and the continuation summary written after a compaction
+# (a user entry, but not something the user typed)
+SKIP_FLAGS = ("isSidechain", "isMeta", "isCompactSummary")
 
 Entry = dict[str, Any]
 
@@ -32,7 +35,7 @@ def _parse(lines: Iterable[str]) -> Iterator[Entry]:
             entry = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if isinstance(entry, dict) and not entry.get("isSidechain") and not entry.get("isMeta"):
+        if isinstance(entry, dict) and not any(entry.get(flag) for flag in SKIP_FLAGS):
             yield entry
 
 

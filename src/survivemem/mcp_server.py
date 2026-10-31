@@ -123,13 +123,6 @@ def memory_status() -> dict[str, Any]:
         return status
 
 
-def current_session(db: sqlite3.Connection, res: identity.Resolution) -> str:
-    """MCP servers are not told the Claude Code session id: use the session the prompt hook saw
-    last in this project, or a stable per-project id when there is none (Claude Desktop)."""
-    latest = store.latest_state(db, res.project_id)
-    return latest.session_id if latest else f"mcp-{res.project_id or 'global'}"
-
-
 def _state_payload(saved: SessionState) -> dict[str, Any]:
     return {
         "session_id": saved.session_id,
@@ -151,7 +144,7 @@ def checkpoint(
     blockers: list[str] | None = None,
 ) -> dict[str, Any]:
     with session() as (db, _, res):
-        sid = current_session(db, res)
+        sid = store.current_session(db, res.project_id)
         old = store.get_state(db, sid)
         new = state.checkpoint(
             old.state if old else {},
@@ -168,7 +161,7 @@ def checkpoint(
 
 def session_state() -> dict[str, Any]:
     with session() as (db, _, res):
-        found = store.get_state(db, current_session(db, res))
+        found = store.get_state(db, store.current_session(db, res.project_id))
         if found is None or state.is_empty(found.state):
             return {}
         return _state_payload(found)

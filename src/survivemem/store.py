@@ -851,6 +851,13 @@ def latest_state(db: sqlite3.Connection, project: str | None) -> SessionState | 
     return _state(row) if row else None
 
 
+def current_session(db: sqlite3.Connection, project: str | None) -> str:
+    """MCP servers and the CLI are not told the Claude Code session id: use the session the
+    prompt hook saw last in this project, or a stable per-project id when there is none."""
+    latest = latest_state(db, project)
+    return latest.session_id if latest else f"mcp-{project or 'global'}"
+
+
 def list_states(db: sqlite3.Connection) -> list[SessionState]:
     return [_state(row) for row in db.execute(SQL_STATE_LIST)]
 

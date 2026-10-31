@@ -282,3 +282,20 @@ def test_remoteless_repo_walks_history_only_once(
     monkeypatch.setattr(identity, "root_commit", no_walk)
     again = resolve(db, repo)
     assert again.step == "path" and again.project_id == first.project_id
+
+
+def test_shallow_clone_records_no_root(db: sqlite3.Connection, tmp_path: Path) -> None:
+    import subprocess
+
+    src = make_repo(tmp_path / "src", {"origin": "https://example.com/up/x.git"}, commits=3)
+    shallow = tmp_path / "shallow"
+    subprocess.run(
+        ["git", "clone", "-q", "--depth", "1", f"file://{src}", str(shallow)],
+        check=True,
+        capture_output=True,
+    )
+    git(shallow, "remote", "set-url", "origin", "https://example.com/fork/x.git")
+    resolve(db, src)
+    res = resolve(db, shallow)
+    assert res.root is None
+    assert not any(i.startswith("root:") for i in res.identities)

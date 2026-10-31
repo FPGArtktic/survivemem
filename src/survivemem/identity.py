@@ -222,6 +222,10 @@ def root_commit(loc: Location) -> str | None:
     """Oldest root: newer roots appear when a subtree is squashed in (u-boot has four)."""
     if not loc.is_git or not loc.head:
         return None
+    # In a shallow clone the parentless commits are the depth boundary, not the real root, and
+    # they move with --depth: no root identity is better than a wrong one.
+    if _git(loc.root, "rev-parse", "--is-shallow-repository") == "true":
+        return None
     out = _git(loc.root, "rev-list", "--max-parents=0", "--reverse", "HEAD", timeout=ROOT_TIMEOUT)
     return out.splitlines()[0] if out else None
 

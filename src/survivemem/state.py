@@ -13,6 +13,7 @@ MAX_FILES = 30
 MAX_PROMPTS = 3
 PROMPT_CHARS = 300
 ANSWER_CHARS = 600
+SUMMARY_CHARS = 1200
 LIST_FIELDS = ("done", "next", "decisions", "files", "blockers", "commands", "recent_prompts")
 
 State = dict[str, Any]
@@ -41,7 +42,8 @@ def union(newer: Sequence[str], older: Sequence[str], limit: int) -> list[str]:
 
 
 def is_empty(state: State) -> bool:
-    return not any(text(state.get(k)) for k in ("goal", "in_progress", "last_answer")) and not any(
+    scalars = ("goal", "in_progress", "last_answer", "summary")
+    return not any(text(state.get(k)) for k in scalars) and not any(
         strings(state.get(k)) for k in LIST_FIELDS
     )
 
@@ -102,7 +104,7 @@ def from_transcript(entries: Sequence[transcript.Entry]) -> State:
 def merge_heuristic(old: State, found: State) -> State:
     """Fallback for a model that forgot to checkpoint: never overrides its goal or decisions."""
     state = dict(old)
-    for key in ("recent_prompts", "last_answer", "commands"):
+    for key in ("recent_prompts", "last_answer", "commands", "summary"):
         state[key] = found.get(key, state.get(key))
     for key in ("done", "in_progress", "next"):
         if key in found:
@@ -120,6 +122,7 @@ SECTIONS: tuple[tuple[str, str, int], ...] = (
     ("BLOCKERS", "blockers", ITEM_CHARS),
     ("NEXT", "next", ITEM_CHARS),
     ("DECISIONS", "decisions", ITEM_CHARS),
+    ("SUMMARY", "summary", SUMMARY_CHARS),
     ("DONE", "done", ITEM_CHARS),
     ("FILES", "files", ITEM_CHARS),
     ("RECENT COMMANDS", "commands", ITEM_CHARS),

@@ -77,6 +77,11 @@ def test_unreachable_ollama_degrades() -> None:
     assert not embed.ollama_reachable(Config(ollama_url="http://127.0.0.1:9"))
 
 
+def test_summarize() -> None:
+    reply = ollama(lambda r: httpx.Response(200, json={"response": " 1. goal\n2. done "}))
+    assert embed.summarize("text", LOCAL, transport=reply) == "1. goal\n2. done"
+
+
 def vec_db(db: sqlite3.Connection) -> sqlite3.Connection:
     assert embed.load_extension(db)
     store.create_vec_table(db)
@@ -154,6 +159,18 @@ def test_stop_hook_embeds_backlog(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     hooks.run("stop", io.StringIO(payload), io.StringIO())
     with closing(dbmod.connect(paths.db_path())) as db:
         assert embed.load_extension(db) and store.vector_count(db) == 1
+
+
+def test_precompact_summary_when_enabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    paths.config_path().write_text("[compaction]\nsummarize = true\n")
+    monkeypatch.setattr(embed, "summarize", lambda text, cfg, transport=None: "1. goal")
+    repo = make_repo(tmp_path / "r")
+    fixture = Path(__file__).parent / "fixtures" / "transcript_basic.jsonl"
+    payload = {"session_id": "s1", "transcript_path": str(fixture), "cwd": str(repo)}
+    hooks.run("precompact", io.StringIO(json.dumps(payload)), io.StringIO())
+    with closing(dbmod.connect(paths.db_path())) as db:
+        saved = store.get_state(db, "s1")
+    assert saved and saved.state["summary"] == "1. goal"
 
 
 def test_status_reports_vec_and_ollama(db: sqlite3.Connection) -> None:

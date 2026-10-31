@@ -233,6 +233,8 @@ def hook_precompact(payload: HookInput) -> str:
     entries = transcript.tail(Path(path)) if path else []
     found = state.from_transcript(entries)
     with session(payload) as s:
+        if s.cfg.compaction_summarize:
+            found["summary"] = summary_of(s.cfg, found)
         if sid:
             old = store.get_state(s.db, sid)
             merged = state.merge_heuristic(old.state if old else {}, found)
@@ -243,6 +245,22 @@ def hook_precompact(payload: HookInput) -> str:
         )
         purge_old_states(s)
     return ""
+
+
+def summary_of(cfg: Config, found: state.State) -> str:
+    """Optional ([compaction] summarize): a local model's 10-line summary, else nothing."""
+    from survivemem import embed
+
+    text = "\n".join(
+        [
+            *state.strings(found.get("recent_prompts")),
+            state.text(found.get("last_answer")),
+            *state.strings(found.get("commands")),
+        ]
+    )
+    if not text.strip():
+        return ""
+    return embed.summarize(text, cfg) or ""
 
 
 def startup_hits(s: Session, st: state.State) -> list[Hit]:

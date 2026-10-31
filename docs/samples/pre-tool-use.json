@@ -1,0 +1,13 @@
+{
+  "session_id": "4f0c2a8e-1b7d-4c55-9a43-2b1e9d6f7a10",
+  "transcript_path": "/home/user/.claude/projects/-home-user-w-linux-de10/4f0c2a8e-1b7d-4c55-9a43-2b1e9d6f7a10.jsonl",
+  "cwd": "/home/user/w/linux-de10",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "make -j8 dtbs 2>&1 | tail -20",
+    "description": "Rebuild the device trees"
+  },
+  "tool_use_id": "toolu_01KJ3n5Yq7Vd2RzP8mWcXa4T"
+}

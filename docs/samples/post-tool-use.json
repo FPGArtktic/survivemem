@@ -1,0 +1,19 @@
+{
+  "session_id": "4f0c2a8e-1b7d-4c55-9a43-2b1e9d6f7a10",
+  "transcript_path": "/home/user/.claude/projects/-home-user-w-linux-de10/4f0c2a8e-1b7d-4c55-9a43-2b1e9d6f7a10.jsonl",
+  "cwd": "/home/user/w/linux-de10",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "dmesg | grep -i -e uart -e fpga",
+    "description": "Check UART and FPGA messages"
+  },
+  "tool_response": {
+    "stdout": "[    1.912345] fpga_manager fpga0: Altera SOCFPGA FPGA Manager registered\n[    2.104411] altera_uart ff200100.serial: error -EPROBE_DEFER: failed to get clock\n[    2.104520] altera_uart: probe of ff200100.serial failed with error -517",
+    "stderr": "",
+    "interrupted": false,
+    "isImage": false
+  },
+  "tool_use_id": "toolu_01Pq8sT2bV6nW4cY1xZ7rD3F"
+}

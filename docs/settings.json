@@ -3,6 +3,24 @@
     "UserPromptSubmit": [
       { "hooks": [{ "type": "command", "command": "survivemem hook prompt", "timeout": 5 }] }
     ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "survivemem hook pretool", "timeout": 5 }]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|mcp__.*",
+        "hooks": [{ "type": "command", "command": "survivemem hook posttool", "timeout": 5 }]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "survivemem hook posttool", "timeout": 5 }]
+      }
+    ],
     "Stop": [
       { "hooks": [{ "type": "command", "command": "survivemem hook stop", "timeout": 5 }] }
     ],

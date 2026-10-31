@@ -1,0 +1,14 @@
+{
+  "session_id": "4f0c2a8e-1b7d-4c55-9a43-2b1e9d6f7a10",
+  "transcript_path": "/home/user/.claude/projects/-home-user-w-linux-de10/4f0c2a8e-1b7d-4c55-9a43-2b1e9d6f7a10.jsonl",
+  "cwd": "/home/user/w/linux-de10",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUseFailure",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "make -j8 dtbs 2>&1 | tail -20",
+    "description": "Rebuild the device trees"
+  },
+  "tool_use_id": "toolu_01KJ3n5Yq7Vd2RzP8mWcXa4T",
+  "error": "Exit code 2\nError: arch/arm/boot/dts/socfpga.dtsi:812.3-4 syntax error\nFATAL ERROR: Unable to parse input tree\nmake[2]: *** [scripts/Makefile.lib:423: arch/arm/boot/dts/socfpga_cyclone5_de10_nano.dtb] Error 1\nmake[1]: *** [Makefile:1474: dtbs] Error 2"
+}

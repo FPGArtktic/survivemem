@@ -7,6 +7,7 @@ license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
 authors = [{ name = "Mateusz Okulanis", email = "FPGArtktic@outlook.com" }]
 requires-python = ">=3.12"
+keywords = ["claude-code", "mcp", "memory", "sqlite", "fts5", "hooks", "yocto", "fpga"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
@@ -20,6 +21,11 @@ dependencies = [
     # Ollama embeddings over loopback with timeouts; already pulled in by mcp. BSD-3-Clause.
     "httpx>=0.27",
 ]
+
+[project.urls]
+Homepage = "https://github.com/FPGArtktic/survivemem"
+Repository = "https://github.com/FPGArtktic/survivemem"
+Issues = "https://github.com/FPGArtktic/survivemem/issues"
 
 [project.optional-dependencies]
 # Vector rerank; FTS5-only search works without it. MIT OR Apache-2.0.

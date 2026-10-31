@@ -12,10 +12,10 @@ from functools import cached_property
 from pathlib import Path
 from typing import Any
 
-from survivemem import __version__, hooks, identity, store
+from survivemem import __version__, hooks, identity, state, store
 from survivemem import db as dbmod
 from survivemem.config import Config, ConfigError, load_config
-from survivemem.model import Checkout, Memory, hit_json, memory_json, to_json
+from survivemem.model import Checkout, Memory, SessionState, hit_json, memory_json, to_json
 from survivemem.output import FORMATS, Column, Output, Record, emit_error, relative
 
 EXIT_USAGE, EXIT_NOT_FOUND, EXIT_DB, EXIT_AMBIGUOUS = 1, 2, 3, 4
@@ -483,6 +483,67 @@ def render_here(r: Record) -> str:
 
 
 # ---------------------------------------------------------------------------------------------
+# Session state (§16)
+
+
+def _session_id(ctx: Ctx) -> str:
+    return str(ctx.args.session or store.current_session(ctx.db, ctx.here.project_id))
+
+
+def state_record(sid: str, found: SessionState | None) -> Record:
+    if found is None:
+        return {
+            "session_id": sid,
+            "project": None,
+            "state": {},
+            "updated_at": None,
+            "updated_at_iso": None,
+        }
+    data: Record = to_json(found)
+    return data
+
+
+def render_state_record(r: Record) -> str:
+    return state.render(r["state"]) or f"(no state for session {r['session_id']})"
+
+
+def cmd_state_show(ctx: Ctx) -> int:
+    sid = _session_id(ctx)
+    ctx.out.record(state_record(sid, store.get_state(ctx.db, sid)), render_state_record)
+    return 0
+
+
+def cmd_state_set(ctx: Ctx) -> int:
+    a = ctx.args
+    sid = _session_id(ctx)
+    old = store.get_state(ctx.db, sid)
+    new = state.checkpoint(
+        old.state if old else {},
+        goal=a.goal,
+        done=a.done,
+        in_progress=a.in_progress,
+        next_=a.next,
+        decisions=a.decision,
+        files=a.file or (),
+        blockers=a.blocker,
+    )
+    saved = store.save_state(ctx.db, sid, ctx.here.project_id, new)
+    ctx.out.record(state_record(sid, saved), render_state_record)
+    return 0
+
+
+def cmd_state_purge(ctx: Ctx) -> int:
+    everything = ctx.args.all_sessions
+    what = "all session states" if everything else "session states older than 14 days"
+    if not ctx.confirm(f"Delete {what}?"):
+        return EXIT_USAGE
+    cutoff = dbmod.now_ms() + 1 if everything else dbmod.now_ms() - state.TTL_MS
+    purged = store.purge_states(ctx.db, cutoff)
+    ctx.out.record({"purged": purged}, lambda r: f"purged {r['purged']} session states")
+    return 0
+
+
+# ---------------------------------------------------------------------------------------------
 # Integration
 
 
@@ -589,6 +650,24 @@ def _project_commands(
     _add(projects, "here", cmd_projects_here, "resolution chain for $PWD", (common,))
 
 
+def _state_commands(sub: Any, common: argparse.ArgumentParser) -> None:
+    p = _add(sub, "state", cmd_state_show, "compaction-proof session checkpoint", (common,))
+    p.add_argument("--session")
+    states = p.add_subparsers(dest="state_cmd", parser_class=Parser)
+    q = _add(states, "show", cmd_state_show, "show the current session's state", (common,))
+    q.add_argument("--session")
+    q = _add(states, "set", cmd_state_set, "update the current session's state", (common,))
+    q.add_argument("--session")
+    q.add_argument("--goal")
+    q.add_argument("--in-progress")
+    for flag in ("--done", "--next", "--decision", "--blocker"):
+        q.add_argument(flag, action="append", help="repeatable; replaces the stored list")
+    q.add_argument("--file", action="append", help="repeatable; merged into the stored files")
+    q = _add(states, "purge", cmd_state_purge, "delete states older than 14 days", (common,))
+    q.add_argument("--all", dest="all_sessions", action="store_true", help="delete every state")
+    q.add_argument("--yes", action="store_true")
+
+
 def build_parser() -> Parser:
     parser = Parser(prog="survivemem", add_help=False, usage=argparse.SUPPRESS)
     parser.add_argument("--help", "-h", action="store_true")
@@ -598,6 +677,7 @@ def build_parser() -> Parser:
     _memory_commands(sub, common, filters)
     _clone_commands(sub, common, filters)
     _project_commands(sub, common, filters)
+    _state_commands(sub, common)
     _add(sub, "serve", cmd_serve, "MCP stdio server", ())
     p = _add(sub, "hook", cmd_hook, "Claude Code hook handler (reads JSON on stdin)", ())
     p.add_argument("event", choices=sorted(hooks.HANDLERS))

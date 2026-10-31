@@ -220,3 +220,32 @@ def test_hook_command_reads_stdin(run: Runner, repo: Path, monkeypatch: pytest.M
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"prompt": "x", "cwd": str(repo)})))
     code, out, _ = run("hook", "prompt")
     assert code == 0 and out == ""
+
+
+def test_state_set_show_purge(run: Runner, repo: Path) -> None:
+    empty = run.json("state", "show")
+    assert empty["state"] == {} and empty["session_id"].startswith("mcp-")
+    saved = run.json(
+        "state",
+        "set",
+        "--goal",
+        "bring up uart",
+        "--next",
+        "dts",
+        "--next",
+        "probe",
+        "--file",
+        "a.dts",
+    )
+    assert saved["state"]["next"] == ["dts", "probe"] and saved["state"]["source"] == "model"
+    again = run.json("state", "set", "--next", "probe", "--file", "b.dts")
+    assert again["state"]["goal"] == "bring up uart" and again["state"]["files"] == [
+        "b.dts",
+        "a.dts",
+    ]
+    code, out, _ = run("state", "show", "--format", "table")
+    assert code == 0 and out.startswith("<survivemem-state>\nGOAL: bring up uart")
+    assert run.json("state", "purge", "--yes")["purged"] == 0
+    assert run.json("state", "purge", "--all", "--yes")["purged"] == 1
+    code, _, err = run("state", "purge")
+    assert code == 1 and "--yes" in err

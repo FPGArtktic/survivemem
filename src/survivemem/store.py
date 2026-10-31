@@ -13,8 +13,11 @@ from typing import Any
 from survivemem.db import KINDS, SOURCES, new_id, now_ms, transaction
 from survivemem.model import (
     Checkout,
+    Entry,
+    Evidence,
     Hit,
     Identity,
+    Investigation,
     Memory,
     Project,
     ProjectSummary,
@@ -250,6 +253,54 @@ SQL_STATE_LATEST = (
 SQL_STATE_LIST = "SELECT " + STATE_COLS + " FROM session_state ORDER BY updated_at DESC, session_id"
 SQL_STATE_PURGE = "DELETE FROM session_state WHERE updated_at < ?"
 SQL_STATE_PROJECT_MOVE = "UPDATE session_state SET project = ? WHERE project = ?"
+
+INV_COLS = (
+    "id, project, checkout_id, title, symptom, status, env, root_cause, fix, created_at,"
+    " updated_at, closed_at"
+)
+SQL_INV_INSERT = (
+    "INSERT INTO investigations (" + INV_COLS + ") VALUES (:id, :project, :checkout_id, :title,"
+    " :symptom, 'open', :env, NULL, NULL, :now, :now, NULL)"
+)
+SQL_INV_GET = "SELECT " + INV_COLS + " FROM investigations WHERE id = ?"
+SQL_INV_PREFIX = "SELECT id FROM investigations WHERE id LIKE ? || '%' ORDER BY id LIMIT 2"
+SQL_INV_OPEN = "SELECT " + INV_COLS + " FROM investigations WHERE project = ? AND status = 'open'"
+SQL_INV_LIST = (
+    "SELECT " + INV_COLS + " FROM investigations WHERE (:project IS NULL OR project = :project)"
+    " AND (:status IS NULL OR status = :status) ORDER BY updated_at DESC, id"
+)
+SQL_INV_GREP = (
+    "SELECT DISTINCT e.inv_id FROM inv_fts JOIN inv_entries e ON e.rid = inv_fts.rowid"
+    " WHERE inv_fts MATCH ?"
+)
+SQL_INV_STATUS = (
+    "UPDATE investigations SET status = :status, root_cause = coalesce(:root_cause, root_cause),"
+    " fix = coalesce(:fix, fix), closed_at = :closed_at, updated_at = :now WHERE id = :id"
+)
+SQL_INV_TOUCH = "UPDATE investigations SET updated_at = ? WHERE id = ?"
+SQL_INV_PROJECT_MOVE = "UPDATE investigations SET project = ? WHERE project = ?"
+ENTRY_COLS = (
+    "id, inv_id, seq, kind, text, command, result, anchor, excerpt_sha, refs, evidence_id,"
+    " created_at"
+)
+SQL_ENTRY_NEXT_SEQ = "SELECT coalesce(max(seq), 0) + 1 FROM inv_entries WHERE inv_id = ?"
+SQL_ENTRY_INSERT = (
+    "INSERT INTO inv_entries (" + ENTRY_COLS + ") VALUES (:id, :inv_id, :seq, :kind, :text,"
+    " :command, :result, :anchor, :excerpt_sha, :refs, :evidence_id, :now)"
+)
+SQL_ENTRIES_OF = "SELECT " + ENTRY_COLS + " FROM inv_entries WHERE inv_id = ? ORDER BY seq"
+SQL_ENTRIES_BY_COMMAND = (
+    "SELECT " + ENTRY_COLS + " FROM inv_entries WHERE inv_id = ? AND command = ? ORDER BY seq"
+)
+EVIDENCE_COLS = "id, inv_id, path, sha256, bytes, tool, excerpt, created_at"
+SQL_EVIDENCE_INSERT = (
+    "INSERT INTO evidence (" + EVIDENCE_COLS + ") VALUES (:id, :inv_id, :path, :sha256, :bytes,"
+    " :tool, :excerpt, :now)"
+)
+SQL_EVIDENCE_GET = "SELECT " + EVIDENCE_COLS + " FROM evidence WHERE id = ?"
+SQL_EVIDENCE_OF = (
+    "SELECT " + EVIDENCE_COLS + " FROM evidence WHERE inv_id = ? ORDER BY created_at, id"
+)
 
 SQL_LINK_INSERT = "INSERT OR IGNORE INTO project_links (parent, child) VALUES (?, ?)"
 SQL_LINK_DELETE = "DELETE FROM project_links WHERE parent = ? AND child = ?"
@@ -802,6 +853,7 @@ MERGE_STATEMENTS: tuple[str, ...] = (
     SQL_MOVE_LINKS_PARENT,
     SQL_MOVE_LINKS_CHILD,
     SQL_STATE_PROJECT_MOVE,
+    SQL_INV_PROJECT_MOVE,
 )
 
 
@@ -987,3 +1039,192 @@ def list_states(db: sqlite3.Connection) -> list[SessionState]:
 
 def purge_states(db: sqlite3.Connection, older_than_ms: int) -> int:
     return db.execute(SQL_STATE_PURGE, (older_than_ms,)).rowcount
+
+
+# ---------------------------------------------------------------------------------------------
+# Investigations (§14)
+
+ENTRY_KINDS = ("hypothesis", "experiment", "observation", "ruled_out", "note")
+RESULTS = ("good", "bad", "inconclusive")
+INV_STATUSES = ("open", "paused", "solved", "abandoned")
+EVIDENCE_CAP_BYTES = 200 * 1024 * 1024
+EXCERPT_CHARS = 1000
+
+
+def _investigation(row: sqlite3.Row) -> Investigation:
+    return Investigation(*tuple(row))
+
+
+def _entry(row: sqlite3.Row) -> Entry:
+    return Entry(*tuple(row))
+
+
+def _evidence(row: sqlite3.Row) -> Evidence:
+    return Evidence(*tuple(row))
+
+
+def open_investigation(
+    db: sqlite3.Connection,
+    project: str,
+    title: str,
+    symptom: str,
+    *,
+    checkout_id: str | None = None,
+    env: dict[str, Any] | None = None,
+) -> Investigation:
+    current = open_investigation_of(db, project)
+    if current is not None:
+        raise Invalid(
+            f'investigation {current.id} "{current.title}" is already open in this '
+            "project; pause or close it first"
+        )
+    params = {
+        "id": new_id(),
+        "project": project,
+        "checkout_id": checkout_id,
+        "title": _check_content(title),
+        "symptom": _check_content(symptom),
+        "env": json.dumps(env, ensure_ascii=False) if env else None,
+        "now": now_ms(),
+    }
+    db.execute(SQL_INV_INSERT, params)
+    return get_investigation(db, str(params["id"]))
+
+
+def get_investigation(db: sqlite3.Connection, ref: str) -> Investigation:
+    inv_id = _resolve_prefix(db, SQL_INV_PREFIX, ref, "investigation")
+    return _investigation(db.execute(SQL_INV_GET, (inv_id,)).fetchone())
+
+
+def open_investigation_of(db: sqlite3.Connection, project: str | None) -> Investigation | None:
+    if project is None:
+        return None
+    row = db.execute(SQL_INV_OPEN, (project,)).fetchone()
+    return _investigation(row) if row else None
+
+
+def list_investigations(
+    db: sqlite3.Connection,
+    project: str | None = None,
+    status: str | None = None,
+    grep: str | None = None,
+) -> list[Investigation]:
+    found = [
+        _investigation(r) for r in db.execute(SQL_INV_LIST, {"project": project, "status": status})
+    ]
+    if not grep:
+        return found
+    terms = fts_terms(grep)
+    if not terms:
+        return []
+    matching = {r[0] for r in db.execute(SQL_INV_GREP, (_fts_match(terms),))}
+    return [i for i in found if i.id in matching]
+
+
+def set_investigation_status(
+    db: sqlite3.Connection,
+    inv_id: str,
+    status: str,
+    *,
+    root_cause: str | None = None,
+    fix: str | None = None,
+) -> Investigation:
+    _check_choice(status, INV_STATUSES, "status")
+    closed = now_ms() if status in ("solved", "abandoned") else None
+    db.execute(
+        SQL_INV_STATUS,
+        {
+            "id": inv_id,
+            "status": status,
+            "root_cause": root_cause,
+            "fix": fix,
+            "closed_at": closed,
+            "now": now_ms(),
+        },
+    )
+    return get_investigation(db, inv_id)
+
+
+@dataclass(frozen=True, slots=True)
+class NewEntry:
+    kind: str
+    text: str
+    command: str | None = None
+    result: str | None = None
+    anchor: str | None = None
+    excerpt_sha: str | None = None
+    refs: Any = None
+    evidence_id: str | None = None
+
+
+def add_entry(db: sqlite3.Connection, inv_id: str, new: NewEntry) -> Entry:
+    """Append-only; seq is allocated inside the write transaction, so it stays monotonic."""
+    _check_choice(new.kind, ENTRY_KINDS, "entry kind")
+    if new.kind == "experiment" and not new.command:
+        raise Invalid("an experiment needs the command it runs")
+    if new.result is not None:
+        _check_choice(new.result, RESULTS, "result")
+    params = {
+        "id": new_id(),
+        "inv_id": inv_id,
+        "kind": new.kind,
+        "text": _check_content(new.text),
+        "command": new.command,
+        "result": new.result,
+        "anchor": new.anchor,
+        "excerpt_sha": new.excerpt_sha,
+        "refs": validate_refs(new.refs),
+        "evidence_id": new.evidence_id,
+        "now": now_ms(),
+    }
+    with transaction(db):
+        params["seq"] = db.execute(SQL_ENTRY_NEXT_SEQ, (inv_id,)).fetchone()[0]
+        db.execute(SQL_ENTRY_INSERT, params)
+        db.execute(SQL_INV_TOUCH, (params["now"], inv_id))
+    return next(e for e in entries_of(db, inv_id) if e.id == params["id"])
+
+
+def entries_of(db: sqlite3.Connection, inv_id: str) -> list[Entry]:
+    return [_entry(r) for r in db.execute(SQL_ENTRIES_OF, (inv_id,))]
+
+
+def entries_by_command(db: sqlite3.Connection, inv_id: str, command: str) -> list[Entry]:
+    return [_entry(r) for r in db.execute(SQL_ENTRIES_BY_COMMAND, (inv_id, command))]
+
+
+def add_evidence(
+    db: sqlite3.Connection,
+    inv_id: str,
+    path: str,
+    sha256: str,
+    size: int,
+    tool: str | None,
+    excerpt: str,
+) -> Evidence:
+    used = sum(e.bytes for e in evidence_of(db, inv_id))
+    if used + size > EVIDENCE_CAP_BYTES:
+        raise Invalid(
+            f"evidence for this investigation would exceed "
+            f"{EVIDENCE_CAP_BYTES // (1024 * 1024)} MB; attach with --no-copy or prune"
+        )
+    params = {
+        "id": new_id(),
+        "inv_id": inv_id,
+        "path": path,
+        "sha256": sha256,
+        "bytes": size,
+        "tool": tool,
+        "excerpt": excerpt[:EXCERPT_CHARS],
+        "now": now_ms(),
+    }
+    db.execute(SQL_EVIDENCE_INSERT, params)
+    return _evidence(db.execute(SQL_EVIDENCE_GET, (params["id"],)).fetchone())
+
+
+def get_evidence(db: sqlite3.Connection, evidence_id: str) -> Evidence | None:
+    row = db.execute(SQL_EVIDENCE_GET, (evidence_id,)).fetchone()
+    return _evidence(row) if row else None
+
+
+def evidence_of(db: sqlite3.Connection, inv_id: str) -> list[Evidence]:
+    return [_evidence(r) for r in db.execute(SQL_EVIDENCE_OF, (inv_id,))]

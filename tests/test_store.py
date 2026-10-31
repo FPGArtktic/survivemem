@@ -230,3 +230,51 @@ def test_fts_rebuild_and_check(db: sqlite3.Connection) -> None:
     store.rebuild_fts(db)
     assert store.fts_ok(db)
     assert store.kind_counts(db) == {"fact": 1}
+
+
+def test_investigation_lifecycle(db: sqlite3.Connection) -> None:
+    inv = store.open_investigation(
+        db, "p1", "UART hang", "hangs after fpga load", env={"environment": ["MACHINE=cyclone5"]}
+    )
+    assert inv.status == "open" and store.open_investigation_of(db, "p1") == inv
+    with pytest.raises(store.Invalid, match="already open"):
+        store.open_investigation(db, "p1", "another", "x")
+    h = store.add_entry(db, inv.id, store.NewEntry("hypothesis", "bridge not enabled"))
+    e = store.add_entry(
+        db,
+        inv.id,
+        store.NewEntry(
+            "experiment", "reload with bridges", command="dmesg", result="bad", anchor="abc"
+        ),
+    )
+    assert (h.seq, e.seq) == (1, 2)
+    assert [x.seq for x in store.entries_by_command(db, inv.id, "dmesg")] == [2]
+    with pytest.raises(store.Invalid, match="command"):
+        store.add_entry(db, inv.id, store.NewEntry("experiment", "no command"))
+    with pytest.raises(store.Invalid, match="result"):
+        store.add_entry(db, inv.id, store.NewEntry("experiment", "x", command="c", result="ok"))
+    paused = store.set_investigation_status(db, inv.id, "paused")
+    assert paused.closed_at is None and store.open_investigation_of(db, "p1") is None
+    store.open_investigation(db, "p1", "second", "y")
+    solved = store.set_investigation_status(db, inv.id, "solved", root_cause="rc", fix="f")
+    assert solved.closed_at is not None and (solved.root_cause, solved.fix) == ("rc", "f")
+    assert {i.title for i in store.list_investigations(db, "p1")} == {"UART hang", "second"}
+    assert [i.id for i in store.list_investigations(db, grep="bridge")] == [inv.id]
+    assert store.get_investigation(db, inv.id[:12]).id == inv.id
+
+
+def test_evidence_cap(db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch) -> None:
+    inv = store.open_investigation(db, "p1", "t", "s")
+    ev = store.add_evidence(db, inv.id, "/tmp/dmesg.txt", "ab" * 32, 100, "dmesg", "x" * 2000)
+    assert len(ev.excerpt) == 1000 and store.get_evidence(db, ev.id) == ev
+    monkeypatch.setattr(store, "EVIDENCE_CAP_BYTES", 150)
+    with pytest.raises(store.Invalid, match="exceed"):
+        store.add_evidence(db, inv.id, "/tmp/big", "cd" * 32, 100, None, "y")
+    assert [e.path for e in store.evidence_of(db, inv.id)] == ["/tmp/dmesg.txt"]
+
+
+def test_merge_moves_investigations(db: sqlite3.Connection) -> None:
+    src, dst = store.create_project(db, "src"), store.create_project(db, "dst")
+    inv = store.open_investigation(db, src.id, "t", "s")
+    store.merge_projects(db, src.id, dst.id)
+    assert store.get_investigation(db, inv.id).project == dst.id

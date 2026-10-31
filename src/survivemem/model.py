@@ -89,6 +89,50 @@ class SessionState:
     updated_at: int
 
 
+@dataclass(frozen=True, slots=True)
+class Investigation:
+    id: str
+    project: str
+    checkout_id: str | None
+    title: str
+    symptom: str
+    status: str
+    env: str | None
+    root_cause: str | None
+    fix: str | None
+    created_at: int
+    updated_at: int
+    closed_at: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class Entry:
+    id: str
+    inv_id: str
+    seq: int
+    kind: str
+    text: str
+    command: str | None
+    result: str | None
+    anchor: str | None
+    excerpt_sha: str | None
+    refs: str | None
+    evidence_id: str | None
+    created_at: int
+
+
+@dataclass(frozen=True, slots=True)
+class Evidence:
+    id: str
+    inv_id: str
+    path: str
+    sha256: str
+    bytes: int
+    tool: str | None
+    excerpt: str
+    created_at: int
+
+
 def to_json(obj: Any) -> Any:
     """Dataclass → JSON-ready dict with *_iso companions for every timestamp."""
     if isinstance(obj, list | tuple):

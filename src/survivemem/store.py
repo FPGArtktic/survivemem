@@ -68,6 +68,11 @@ SQL_MEMORY_INSERT = (
     " created_at, updated_at) VALUES (:id, :content, :kind, :project, :scope, :source, :refs,"
     " :anchor, :now, :now)"
 )
+SQL_MEMORY_IMPORT = (
+    "INSERT OR IGNORE INTO memories (id, content, kind, project, scope, source, refs, anchor,"
+    " created_at, updated_at, deleted_at) VALUES (:id, :content, :kind, :project, :scope,"
+    " :source, :refs, :anchor, :created_at, :updated_at, :deleted_at)"
+)
 SQL_TAG_INSERT = "INSERT OR IGNORE INTO memory_tags (memory_id, tag) VALUES (?, ?)"
 SQL_TAG_DELETE = "DELETE FROM memory_tags WHERE memory_id = ? AND tag = ?"
 SQL_MEMORY_GET = (
@@ -124,6 +129,7 @@ SQL_FTS_CHECK = "INSERT INTO memories_fts(memories_fts, rank) VALUES ('integrity
 SQL_TRI_CHECK = "INSERT INTO memories_tri(memories_tri, rank) VALUES ('integrity-check', 1)"
 
 SQL_PROJECT_INSERT = "INSERT INTO projects (id, label, created_at) VALUES (?, ?, ?)"
+SQL_PROJECT_IMPORT = "INSERT OR IGNORE INTO projects (id, label, created_at) VALUES (?, ?, ?)"
 SQL_PROJECT_BY_ID = "SELECT id, label, created_at FROM projects WHERE id = ?"
 SQL_PROJECT_BY_LABEL = "SELECT id, label, created_at FROM projects WHERE label = ? ORDER BY id"
 SQL_PROJECT_PREFIX = "SELECT id FROM projects WHERE id LIKE ? || '%' ORDER BY id LIMIT 2"
@@ -413,6 +419,30 @@ def add_memory(
     return get_memory(db, mid)
 
 
+def import_memory(db: sqlite3.Connection, data: dict[str, Any]) -> bool:
+    """Insert an exported memory with its own id and timestamps; False when the id exists."""
+    now = now_ms()
+    params = {
+        "id": str(data["id"]),
+        "content": _check_content(str(data["content"])),
+        "kind": _check_choice(str(data["kind"]), KINDS, "kind"),
+        "project": data.get("project"),
+        "scope": validate_scope(str(data.get("scope") or "project")),
+        "source": _check_choice(str(data.get("source") or "import"), SOURCES, "source"),
+        "refs": validate_refs(data.get("refs")),
+        "anchor": data.get("anchor"),
+        "created_at": int(data.get("created_at") or now),
+        "updated_at": int(data.get("updated_at") or now),
+        "deleted_at": data.get("deleted_at"),
+    }
+    with transaction(db):
+        inserted = db.execute(SQL_MEMORY_IMPORT, params).rowcount == 1
+        if inserted:
+            tags = normalise_tags(str(t) for t in data.get("tags") or ())
+            db.executemany(SQL_TAG_INSERT, [(params["id"], t) for t in tags])
+    return inserted
+
+
 def _resolve_prefix(db: sqlite3.Connection, sql: str, ref: str, what: str) -> str:
     prefix = ref.strip().upper()
     if not prefix.isalnum():
@@ -697,6 +727,13 @@ def create_project(db: sqlite3.Connection, label: str) -> Project:
     project = Project(id=new_id(), label=label, created_at=now_ms())
     db.execute(SQL_PROJECT_INSERT, (project.id, project.label, project.created_at))
     return project
+
+
+def import_project(db: sqlite3.Connection, project: Project) -> bool:
+    return (
+        db.execute(SQL_PROJECT_IMPORT, (project.id, project.label, project.created_at)).rowcount
+        == 1
+    )
 
 
 def get_project(db: sqlite3.Connection, ref: str) -> Project:

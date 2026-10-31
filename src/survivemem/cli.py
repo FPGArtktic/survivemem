@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from survivemem import db as dbmod
-from survivemem import hooks, identity, payload, schema, state, store, version
+from survivemem import exchange, hooks, identity, payload, schema, state, store, version
 from survivemem.config import Config, ConfigError, load_config
 from survivemem.model import Checkout, Memory, SessionState, hit_json, memory_json, to_json
 from survivemem.output import FORMATS, Column, Output, Record, emit_error, relative
@@ -756,6 +756,44 @@ def cmd_state_purge(ctx: Ctx) -> int:
 # Maintenance
 
 REINDEX_BATCH = 32
+EXPORT_FORMATS = ("jsonl", "md")
+
+
+def cmd_export(ctx: Ctx) -> int:
+    from datetime import UTC, datetime
+
+    view = ctx.list_view() if ctx.flag("project") or ctx.flag("global_") else store.ALL
+    fmt = ctx.args.export_format
+    if fmt == "md":
+        memories = store.list_memories(ctx.db, view, kind=ctx.args.kind)
+        today = datetime.fromtimestamp(dbmod.now_ms() / 1000, UTC)
+        sys.stdout.write(exchange.to_markdown(ctx.db, memories, today) + "\n")
+    else:
+        text = exchange.to_jsonl(exchange.records(ctx.db, view, ctx.args.kind))
+        sys.stdout.write(text + "\n" if text else "")
+    return 0
+
+
+def cmd_import(ctx: Ctx) -> int:
+    if sys.stdin.isatty():
+        raise UsageError("import reads JSONL on stdin: survivemem import < memories.jsonl")
+    result = exchange.import_lines(ctx.db, sys.stdin)
+    data = {
+        "memories_added": result.memories_added,
+        "memories_skipped": result.memories_skipped,
+        "projects_added": result.projects_added,
+        "errors": result.errors,
+    }
+    ctx.out.record(
+        data,
+        lambda r: (
+            f"added {r['memories_added']}, skipped "
+            f"{r['memories_skipped']} existing, projects "
+            f"{r['projects_added']}, errors {len(r['errors'])}"
+            + "".join(f"\n  {e}" for e in r["errors"])
+        ),
+    )
+    return EXIT_USAGE if result.errors and not result.memories_added else 0
 
 
 def cmd_reindex(ctx: Ctx) -> int:
@@ -972,6 +1010,10 @@ def build_parser() -> Parser:
     _overview_commands(sub, common, filters)
     _state_commands(sub, common)
     _add(sub, "reindex", cmd_reindex, "rebuild FTS; recompute embeddings if vec enabled", (common,))
+    p = _add(sub, "export", cmd_export, "memories as JSONL (default) or Markdown", (filters,))
+    p.add_argument("--format", dest="export_format", choices=EXPORT_FORMATS, default="jsonl")
+    p.add_argument("--kind", choices=dbmod.KINDS)
+    _add(sub, "import", cmd_import, "read exported JSONL on stdin (idempotent on id)", (common,))
     _add(sub, "serve", cmd_serve, "MCP stdio server", ())
     p = _add(sub, "hook", cmd_hook, "Claude Code hook handler (reads JSON on stdin)", ())
     p.add_argument("event", choices=sorted(hooks.HANDLERS))

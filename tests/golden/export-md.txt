@@ -1,0 +1,12 @@
+# survivemem export — 2026-10-26
+
+## Project: yocto-bsp (id 01JB0000000000000000000BSP)
+### decisions
+- [01JB4K0000000000000000000A] 2026-10-19 — Kernel pinned to 6.6 LTS; vendor BSP breaks on 6.12. #bsp #kernel
+### environment
+- [01JB4K0000000000000000000B] 2026-10-24 — MACHINE=cyclone5 #env
+
+## Global
+### preferences
+- [01JB4K0000000000000000000C] 2026-09-16 — Prefers terse answers.
+  No emojis.

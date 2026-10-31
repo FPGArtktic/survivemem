@@ -258,3 +258,22 @@ def test_is_debug_command(command: str, debug: bool) -> None:
     from survivemem.config import DEFAULT_DEBUG_COMMANDS
 
     assert investigate.is_debug_command(command, DEFAULT_DEBUG_COMMANDS) is debug
+
+
+def test_evidence_cap_checked_before_copying(
+    db: sqlite3.Connection,
+    res: identity.Resolution,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from survivemem import paths
+
+    inv = investigate.open_new(db, res, "t", "s")
+    big = tmp_path / "big.log"
+    big.write_text("x" * 300)
+    monkeypatch.setattr(store, "EVIDENCE_CAP_BYTES", 200)
+    with pytest.raises(store.Invalid, match="--no-copy"):
+        investigate.attach(db, inv, big, "other")
+    assert not paths.evidence_dir(inv.id).exists()
+    linked = investigate.attach(db, inv, big, "other", copy=False)
+    assert linked.path == str(big)

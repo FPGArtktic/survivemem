@@ -314,6 +314,10 @@ SQL_EVIDENCE_INSERT = (
     " :tool, :excerpt, :now)"
 )
 SQL_EVIDENCE_GET = "SELECT " + EVIDENCE_COLS + " FROM evidence WHERE id = ?"
+SQL_EVIDENCE_BYTES_UNDER = (
+    "SELECT coalesce(sum(bytes), 0) FROM evidence WHERE inv_id = ?"
+    " AND substr(path, 1, length(?)) = ?"
+)
 SQL_EVIDENCE_OF = (
     "SELECT " + EVIDENCE_COLS + " FROM evidence WHERE inv_id = ? ORDER BY created_at, id"
 )
@@ -1247,12 +1251,6 @@ def add_evidence(
     tool: str | None,
     excerpt: str,
 ) -> Evidence:
-    used = sum(e.bytes for e in evidence_of(db, inv_id))
-    if used + size > EVIDENCE_CAP_BYTES:
-        raise Invalid(
-            f"evidence for this investigation would exceed "
-            f"{EVIDENCE_CAP_BYTES // (1024 * 1024)} MB; attach with --no-copy or prune"
-        )
     params = {
         "id": new_id(),
         "inv_id": inv_id,
@@ -1265,6 +1263,11 @@ def add_evidence(
     }
     db.execute(SQL_EVIDENCE_INSERT, params)
     return _evidence(db.execute(SQL_EVIDENCE_GET, (params["id"],)).fetchone())
+
+
+def evidence_bytes_under(db: sqlite3.Connection, inv_id: str, folder: str) -> int:
+    """Bytes of the evidence files copied into `folder` (what the 200 MB cap is about)."""
+    return int(db.execute(SQL_EVIDENCE_BYTES_UNDER, (inv_id, folder, folder)).fetchone()[0])
 
 
 def get_evidence(db: sqlite3.Connection, evidence_id: str) -> Evidence | None:

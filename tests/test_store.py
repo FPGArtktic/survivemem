@@ -263,14 +263,12 @@ def test_investigation_lifecycle(db: sqlite3.Connection) -> None:
     assert store.get_investigation(db, inv.id[:12]).id == inv.id
 
 
-def test_evidence_cap(db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_evidence_excerpt_cut(db: sqlite3.Connection) -> None:
     inv = store.open_investigation(db, "p1", "t", "s")
     ev = store.add_evidence(db, inv.id, "/tmp/dmesg.txt", "ab" * 32, 100, "dmesg", "x" * 2000)
     assert len(ev.excerpt) == 1000 and store.get_evidence(db, ev.id) == ev
-    monkeypatch.setattr(store, "EVIDENCE_CAP_BYTES", 150)
-    with pytest.raises(store.Invalid, match="exceed"):
-        store.add_evidence(db, inv.id, "/tmp/big", "cd" * 32, 100, None, "y")
-    assert [e.path for e in store.evidence_of(db, inv.id)] == ["/tmp/dmesg.txt"]
+    assert store.evidence_bytes_under(db, inv.id, "/srv/") == 0
+    assert store.evidence_bytes_under(db, inv.id, "/tmp/") == 100
 
 
 def test_merge_moves_investigations(db: sqlite3.Connection) -> None:

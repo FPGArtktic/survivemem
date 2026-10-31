@@ -496,6 +496,13 @@ def attach(
     target = path
     if copy:
         folder = paths.evidence_dir(inv.id)
+        used = store.evidence_bytes_under(db, inv.id, str(folder) + "/")
+        if used + len(data) > store.EVIDENCE_CAP_BYTES:
+            raise store.Invalid(
+                f"copying {path.name} would exceed "
+                f"{store.EVIDENCE_CAP_BYTES // (1024 * 1024)} MB of evidence for "
+                "this investigation; attach it with --no-copy"
+            )
         folder.mkdir(parents=True, exist_ok=True)
         target = folder / f"{len(store.evidence_of(db, inv.id)) + 1:03d}-{path.name}"
         shutil.copyfile(path, target)

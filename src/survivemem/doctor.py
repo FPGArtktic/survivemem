@@ -22,7 +22,7 @@ class Check:
 
 def check_integrity(db: sqlite3.Connection) -> Check:
     embed.load_extension(db)  # memory_vec cannot be checked without its module
-    result = db.execute("PRAGMA integrity_check").fetchone()[0]
+    result = dbmod.integrity(db)
     return Check("integrity", "ok" if result == "ok" else "fail", str(result))
 
 

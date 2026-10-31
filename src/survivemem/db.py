@@ -8,6 +8,7 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import closing, contextmanager
 from pathlib import Path
+from urllib.parse import quote
 
 from survivemem import paths
 
@@ -228,6 +229,10 @@ def transaction(db: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     db.execute("COMMIT")
 
 
+def integrity(db: sqlite3.Connection) -> str:
+    return str(db.execute(SQL_INTEGRITY_CHECK).fetchone()[0])
+
+
 def schema_version(db: sqlite3.Connection) -> int:
     try:
         row = db.execute(SQL_GET_VERSION).fetchone()
@@ -314,12 +319,13 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
 # A WAL database in a directory we cannot write has no -shm file to coordinate readers, and
 # mode=ro then cannot read at all; immutable=1 reads the main file without locking instead.
 READONLY_URIS = ("file:{}?mode=ro", "file:{}?mode=ro&immutable=1")
+SQL_INTEGRITY_CHECK = "PRAGMA integrity_check"
 
 
 def _connect_readonly(path: Path) -> sqlite3.Connection:
     for template in READONLY_URIS:
         db = sqlite3.connect(
-            template.format(path),
+            template.format(quote(str(path))),  # "?", "#", "%" in a path
             uri=True,
             timeout=5.0,
             isolation_level=None,

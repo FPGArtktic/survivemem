@@ -173,3 +173,13 @@ def test_concurrent_first_open(tmp_path: Path) -> None:
     assert errors == []
     with closing(sqlite3.connect(path)) as conn:
         assert dbmod.schema_version(conn) == dbmod.SCHEMA_VERSION
+
+
+def test_readonly_path_with_uri_characters(tmp_path: Path) -> None:
+    folder = tmp_path / "odd?dir#1%20"
+    folder.mkdir()
+    path = folder / "m.db"
+    dbmod.connect(path).close()
+    path.chmod(0o444)
+    ro = dbmod.connect(path)
+    assert dbmod.schema_version(ro) == dbmod.SCHEMA_VERSION and dbmod.integrity(ro) == "ok"

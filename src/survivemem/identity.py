@@ -370,9 +370,8 @@ def _resolve_location(
     db: sqlite3.Connection, loc: Location, ids: list[str], cfg: Config
 ) -> Resolution:
     root, hint = None, None
-    if loc.name:
-        project, step = _first_owner(db, ids[:1]), "name"
-    else:
+    project, step = (_first_owner(db, ids[:1]), "name") if loc.name else (None, "remote")
+    if project is None:
         remotes = [i for i in ids if i.startswith("remote:")]
         project, step = _first_owner(db, remotes), "remote"
         if project is None and not remotes:

@@ -299,3 +299,13 @@ def test_shallow_clone_records_no_root(db: sqlite3.Connection, tmp_path: Path) -
     res = resolve(db, shallow)
     assert res.root is None
     assert not any(i.startswith("root:") for i in res.identities)
+
+
+def test_unknown_toml_name_falls_through_to_remote(db: sqlite3.Connection, tmp_path: Path) -> None:
+    repo = make_repo(tmp_path / "a", {"origin": "https://example.com/a.git"})
+    first = resolve(db, repo)
+    (repo / ".survivemem.toml").write_text('project = "bsp"\n')
+    again = resolve(db, repo)
+    assert again.step == "remote" and again.project_id == first.project_id
+    owner = store.find_identity(db, "name:bsp")
+    assert owner and owner.project_id == first.project_id

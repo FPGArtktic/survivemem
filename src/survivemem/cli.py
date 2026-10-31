@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import logging
 import re
 import sqlite3
 import sys
@@ -424,6 +425,21 @@ def render_here(r: Record) -> str:
 
 
 # ---------------------------------------------------------------------------------------------
+# Integration
+
+
+def cmd_serve(ctx: Ctx) -> int:
+    from survivemem import logfile, mcp_server  # the MCP SDK is heavy; hooks must not import it
+
+    logfile.configure()
+    try:
+        mcp_server.serve()
+    except Exception:  # top-level boundary of serve: log with traceback, never crash the client
+        logging.getLogger(__name__).exception("survivemem serve failed")
+    return 0
+
+
+# ---------------------------------------------------------------------------------------------
 # Parser
 
 
@@ -519,6 +535,7 @@ def build_parser() -> Parser:
     _memory_commands(sub, common, filters)
     _clone_commands(sub, common, filters)
     _project_commands(sub, common, filters)
+    _add(sub, "serve", cmd_serve, "MCP stdio server", ())
     help_p = sub.add_parser("help", add_help=False)
     help_p.add_argument("topic", nargs="*")
     return parser

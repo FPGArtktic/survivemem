@@ -309,3 +309,21 @@ def test_unknown_toml_name_falls_through_to_remote(db: sqlite3.Connection, tmp_p
     assert again.step == "remote" and again.project_id == first.project_id
     owner = store.find_identity(db, "name:bsp")
     assert owner and owner.project_id == first.project_id
+
+
+def test_history_walk_happens_outside_the_write_lock(
+    db: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = make_repo(tmp_path / "r", {"origin": "https://example.com/r.git"})
+    real = identity.root_commit
+    calls: list[bool] = []
+
+    def spy(loc: identity.Location) -> str | None:
+        calls.append(db.in_transaction)
+        return real(loc)
+
+    monkeypatch.setattr(identity, "root_commit", spy)
+    first = resolve(db, repo)
+    assert calls == [False] and first.root is not None
+    resolve(db, repo)
+    assert calls == [False]  # known by its remote: no second walk

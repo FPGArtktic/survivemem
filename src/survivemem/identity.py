@@ -324,8 +324,18 @@ def resolve(
     ids = identities(loc, cfg)
     if not writable:
         return _lookup_location(db, loc, ids)
+    # The history walk can take seconds on first contact; never hold the write lock over it.
+    root = None if _known_cheaply(db, loc, ids) else root_commit(loc)
     with transaction(db):
-        return _resolve_location(db, loc, ids, cfg)
+        return _resolve_location(db, loc, ids, cfg, root)
+
+
+def _known_cheaply(db: sqlite3.Connection, loc: Location, ids: list[str]) -> bool:
+    """Would the name, remote or (for a repo without remotes) path step hit?"""
+    cheap = [i for i in ids if i.startswith(("name:", "remote:"))]
+    if not any(i.startswith("remote:") for i in ids):
+        cheap.append(path_identity(loc))
+    return _first_owner(db, cheap) is not None
 
 
 def resolve_tolerant(db: sqlite3.Connection, cwd: Path, cfg: Config) -> Resolution:
@@ -367,7 +377,7 @@ def _existing_checkout(db: sqlite3.Connection, loc: Location | None) -> Checkout
 
 
 def _resolve_location(
-    db: sqlite3.Connection, loc: Location, ids: list[str], cfg: Config
+    db: sqlite3.Connection, loc: Location, ids: list[str], cfg: Config, walked: str | None
 ) -> Resolution:
     root, hint = None, None
     project, step = (_first_owner(db, ids[:1]), "name") if loc.name else (None, "remote")
@@ -379,7 +389,7 @@ def _resolve_location(
             # full-history walk of `git rev-list` to the first contact.
             project, step = _first_owner(db, [path_identity(loc)]), "path"
         if project is None:
-            root = root_commit(loc)
+            root = walked
             project, step, hint = _by_root(db, loc, ids, cfg, root)
     if project is None:
         project, step = store.create_project(db, loc.name or loc.root.name), "created"

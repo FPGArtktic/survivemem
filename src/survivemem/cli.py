@@ -213,19 +213,6 @@ def ref_commands(refs: Sequence[dict[str, Any]]) -> list[str]:
 # Memory commands
 
 
-def resolve_scope(ctx: Ctx, scope: str | None) -> str:
-    if scope in (None, "project"):
-        return "project"
-    here = ctx.here
-    if scope == "branch" and here.location and here.location.branch not in (None, "detached"):
-        return f"branch:{here.location.branch}"
-    if scope == "checkout" and here.checkout:
-        return f"checkout:{here.checkout.id}"
-    if scope and ":" in scope:
-        return scope
-    raise UsageError(f"--scope {scope} needs a git checkout on a branch")
-
-
 def cmd_add(ctx: Ctx) -> int:
     a = ctx.args
     refs = [json.loads(r) for r in a.ref] if a.ref else None
@@ -234,7 +221,7 @@ def cmd_add(ctx: Ctx) -> int:
         a.text,
         a.kind,
         project=ctx.project_ref(),
-        scope=resolve_scope(ctx, a.scope),
+        scope=identity.scope_for(ctx.here, a.scope),
         source="cli",
         tags=a.tag or (),
         refs=refs,

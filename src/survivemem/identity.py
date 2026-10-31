@@ -371,6 +371,20 @@ def describe_checkout(c: Checkout) -> str:
     return f"{text} ({', '.join(details)})" if details else text
 
 
+def scope_for(res: Resolution, scope: str | None) -> str:
+    """'project', 'branch' or 'checkout' as given by a user → stored scope for this clone."""
+    if scope in (None, "", "project"):
+        return "project"
+    loc = res.location
+    if scope == "branch" and loc and loc.branch not in (None, "detached"):
+        return f"branch:{loc.branch}"
+    if scope == "checkout" and res.checkout:
+        return f"checkout:{res.checkout.id}"
+    if scope and ":" in scope:
+        return store.validate_scope(scope)
+    raise store.Invalid(f"scope {scope!r} needs a git checkout (on a branch for 'branch')")
+
+
 def scope_suffix(scope: str, checkouts: Mapping[str, Checkout]) -> str:
     """'[branch socfpga-6.6]' / '[clone linux-de10]' / '[clone gone]'; empty for project scope."""
     kind, _, value = scope.partition(":")

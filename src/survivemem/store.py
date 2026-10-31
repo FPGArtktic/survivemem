@@ -857,6 +857,8 @@ def merge_projects(db: sqlite3.Connection, src_ref: str, dst_ref: str) -> Projec
     src, dst = get_project(db, src_ref), get_project(db, dst_ref)
     if src.id == dst.id:
         raise Invalid("cannot merge a project into itself")
+    if open_investigation_of(db, src.id) and open_investigation_of(db, dst.id):
+        raise Invalid("both projects have an open investigation; pause or close one first")
     with transaction(db):
         for sql in MERGE_STATEMENTS:
             db.execute(sql, (dst.id, src.id))
@@ -1212,6 +1214,8 @@ def add_entry(db: sqlite3.Connection, inv_id: str, new: NewEntry) -> Entry:
     _check_choice(new.kind, ENTRY_KINDS, "entry kind")
     if new.kind == "experiment" and not new.command:
         raise Invalid("an experiment needs the command it runs")
+    if new.command and contains_secret(new.command):
+        raise Invalid("command looks like it contains a secret (token, key or password)")
     if new.result is not None:
         _check_choice(new.result, RESULTS, "result")
     params = {

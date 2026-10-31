@@ -151,3 +151,25 @@ def test_parallel_counter_updates_are_not_lost(tmp_path: Path) -> None:
         and again.state["blockers"] == ["LOOP: x"]
         and again.state["_posttool_candidates"] == 100
     )
+
+
+def test_checkpoint_and_todos_are_redacted() -> None:
+    token = "ghp_" + "b" * 36
+    st = state.checkpoint({}, goal=f"use {token}", next_=[f"push with {token}"])
+    assert token not in json.dumps(st)
+    entries = [
+        {
+            "type": "assistant",
+            "message": {
+                "id": "m",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "TodoWrite",
+                        "input": {"todos": [{"content": f"rotate {token}", "status": "pending"}]},
+                    }
+                ],
+            },
+        }
+    ]
+    assert token not in json.dumps(state.from_transcript(entries))

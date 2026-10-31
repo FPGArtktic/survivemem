@@ -276,3 +276,17 @@ def test_merge_moves_investigations(db: sqlite3.Connection) -> None:
     inv = store.open_investigation(db, src.id, "t", "s")
     store.merge_projects(db, src.id, dst.id)
     assert store.get_investigation(db, inv.id).project == dst.id
+
+
+def test_secret_command_and_ambiguous_merge_refused(db: sqlite3.Connection) -> None:
+    a, b = store.create_project(db, "a"), store.create_project(db, "b")
+    inv = store.open_investigation(db, a.id, "t", "s")
+    store.open_investigation(db, b.id, "t", "s")
+    with pytest.raises(store.Invalid, match="secret"):
+        store.add_entry(
+            db,
+            inv.id,
+            store.NewEntry("experiment", "x", command="curl -H 'token: ghp_" + "c" * 36 + "'"),
+        )
+    with pytest.raises(store.Invalid, match="open investigation"):
+        store.merge_projects(db, a.id, b.id)

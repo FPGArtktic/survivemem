@@ -74,7 +74,11 @@ def checkpoint(
     }
     for key, value in updates.items():
         if value is not None:
-            state[key] = value.strip() if isinstance(value, str) else strings(list(value))
+            state[key] = (
+                redact(value.strip())
+                if isinstance(value, str)
+                else [redact(v) for v in strings(list(value))]
+            )
     state["files"] = union(strings(list(files)), strings(old.get("files")), MAX_FILES)
     state["source"] = "model"
     return state
@@ -94,11 +98,15 @@ def from_transcript(entries: Sequence[transcript.Entry]) -> State:
     }
     todos = transcript.last_todos(calls)
     if todos:
-        found["done"] = [t["content"] for t in todos if t["status"] == "completed"]
+        found["done"] = [
+            shorten(t["content"], ITEM_CHARS) for t in todos if t["status"] == "completed"
+        ]
         found["in_progress"] = next(
-            (t["content"] for t in todos if t["status"] == "in_progress"), ""
+            (shorten(t["content"], ITEM_CHARS) for t in todos if t["status"] == "in_progress"), ""
         )
-        found["next"] = [t["content"] for t in todos if t["status"] == "pending"]
+        found["next"] = [
+            shorten(t["content"], ITEM_CHARS) for t in todos if t["status"] == "pending"
+        ]
     if prompts:
         found["goal"] = shorten(prompts[0], ITEM_CHARS)
     return found

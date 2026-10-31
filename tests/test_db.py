@@ -158,3 +158,18 @@ def test_fts_triggers_follow_content(db: sqlite3.Connection) -> None:
     assert db.execute(fts, ("charlie",)).fetchone()[0] == 1
     db.execute("DELETE FROM memories WHERE id = 'a'")
     assert db.execute(fts, ("charlie",)).fetchone()[0] == 0
+
+
+def test_concurrent_first_open(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+
+    path = tmp_path / "race.db"
+    code = f"from survivemem import db; db.connect(__import__('pathlib').Path({str(path)!r}))"
+    procs = [
+        subprocess.Popen([sys.executable, "-c", code], stderr=subprocess.PIPE) for _ in range(6)
+    ]
+    errors = [p.communicate()[1].decode() for p in procs if p.wait() != 0]
+    assert errors == []
+    with closing(sqlite3.connect(path)) as conn:
+        assert dbmod.schema_version(conn) == dbmod.SCHEMA_VERSION

@@ -245,6 +245,10 @@ def migrate(db: sqlite3.Connection) -> int:
         raise DBError(f"database schema v{current} is newer than this survivemem v{SCHEMA_VERSION}")
     for version in range(current + 1, SCHEMA_VERSION + 1):
         with transaction(db):
+            # re-read under the write lock: a hook and the MCP server often open a fresh DB
+            # at the same moment, and only one of them may run each migration
+            if schema_version(db) >= version:
+                continue
             MIGRATIONS[version - 1](db)
             db.execute(SQL_SET_VERSION, (version,))
     return SCHEMA_VERSION
@@ -269,6 +273,24 @@ def _is_writable(path: Path) -> bool:
     return True
 
 
+WAL_ATTEMPTS = 50
+
+
+def enable_wal(db: sqlite3.Connection) -> None:
+    """WAL is persistent, so it is switched on once. The switch can answer "database is locked"
+    without waiting for the busy handler when several processes create the file together."""
+    for _ in range(WAL_ATTEMPTS):
+        try:
+            if db.execute("PRAGMA journal_mode").fetchone()[0] != "wal":
+                db.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e) and "busy" not in str(e):
+                raise
+            time.sleep(0.02)
+    raise sqlite3.OperationalError("could not switch the database to WAL mode")
+
+
 def connect(path: Path | None = None) -> sqlite3.Connection:
     """Open (and migrate) the DB. A read-only file opens read-only; writes then fail loudly."""
     path = path or paths.db_path()
@@ -278,7 +300,7 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
         path.parent.mkdir(parents=True, exist_ok=True)
         db = sqlite3.connect(path, timeout=5.0, isolation_level=None, check_same_thread=False)
         db.row_factory = sqlite3.Row
-        db.execute("PRAGMA journal_mode=WAL")
+        enable_wal(db)
         db.execute("PRAGMA synchronous=NORMAL")
         db.execute("PRAGMA foreign_keys=ON")
         db.execute("PRAGMA busy_timeout=5000")

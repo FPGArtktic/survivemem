@@ -178,6 +178,33 @@ search, when it may store (only when you ask or confirm), and to call `checkpoin
 each completed subtask. A line in your `CLAUDE.md` such as "call the survivemem
 `checkpoint` tool after every completed subtask" makes the habit more reliable.
 
+## opencode
+
+[opencode](https://opencode.ai) gets the MCP server and a plugin that maps its plugin hooks
+to the same `survivemem hook` handlers:
+
+| opencode hook | survivemem | effect |
+|---|---|---|
+| `chat.message` | `hook prompt` | memories (and the open investigation) added to the prompt as a synthetic part |
+| `tool.execute.before` (bash) | `hook pretool` | loop guard; opencode cannot ask from a plugin, so `ask` and `deny` both block with the reason |
+| `tool.execute.after` (bash) | `hook posttool` | capture and loop detection (`metadata.exit` is the exit code) |
+| `experimental.session.compacting` | `hook session-start` | session state and investigation added to the compaction prompt |
+
+```sh
+cp integrations/opencode/survivemem.js ~/.config/opencode/plugins/
+```
+
+and in `~/.config/opencode/opencode.json`:
+
+```json
+{ "mcp": { "survivemem": { "type": "local", "command": ["survivemem", "serve"], "enabled": true } } }
+```
+
+There is no Stop or PreCompact equivalent in the plugin, so opencode sessions produce no
+candidates; checkpoints come from the model's `checkpoint` calls. `chat.message` and
+`experimental.session.compacting` are not in opencode's plugin documentation (they are in
+its type definitions); the plugin was tested against opencode 1.19.
+
 ## Claude Desktop
 
 Claude Desktop for Linux is in beta. Add the server to `claude_desktop_config.json`
